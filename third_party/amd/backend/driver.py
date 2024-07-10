@@ -15,7 +15,14 @@ include_dir = [os.path.join(dirname, "include")]
 
 @functools.lru_cache()
 def _get_path_to_hip_runtime_dylib():
-    lib_name = "libamdhip64.so"
+    
+    #lib_name = "libamdhip64.so"
+    lib_name = "amdhip64.lib"
+    #lib_name = "C://AMD//Rocm//5.7//lib//amdhip64.lib"
+
+    lib_path = os.path.join( os.environ['HIP_PATH'] , 'lib', lib_name )
+    if os.path.exists(lib_path):
+      return lib_path.replace('\\','\\\\')
 
     # If we are told explicitly what HIP runtime dynamic library to use, obey that.
     env_libhip_path = os.getenv("TRITON_LIBHIP_PATH")
@@ -30,11 +37,7 @@ def _get_path_to_hip_runtime_dylib():
     # First search the HIP runtime dynamic library packaged with PyTorch. It's very likely
     # that we run Triton together with PyTorch. This makes sure we use the same dynamic
     # library to avoid version mismatch.
-    site_packages = site.getsitepackages()
-    user_site = site.getusersitepackages()
-    if site.ENABLE_USER_SITE:  # ENABLE_USER_SITE is initialized in getusersitepackages()
-        site_packages = [user_site] + site_packages
-    for path in site_packages:
+    for path in site.getsitepackages():
         path = os.path.join(path, "torch", "lib", lib_name)
         if os.path.exists(path):
             return path
@@ -72,7 +75,7 @@ def _get_path_to_hip_runtime_dylib():
 def compile_module_from_src(src, name):
     key = hashlib.sha256(src.encode("utf-8")).hexdigest()
     cache = get_cache_manager(key)
-    cache_path = cache.get_file(f"{name}.so")
+    cache_path = cache.get_file(f"{name}.pyd")
     if cache_path is None:
         with tempfile.TemporaryDirectory() as tmpdir:
             src_path = os.path.join(tmpdir, "main.c")
@@ -80,7 +83,7 @@ def compile_module_from_src(src, name):
                 f.write(src)
             so = _build(name, src_path, tmpdir, [], include_dir, [])
             with open(so, "rb") as f:
-                cache_path = cache.put(f.read(), f"{name}.so", binary=True)
+                cache_path = cache.put(f.read(), f"{name}.pyd", binary=True)
     import importlib.util
     spec = importlib.util.spec_from_file_location(name, cache_path)
     mod = importlib.util.module_from_spec(spec)
@@ -184,9 +187,9 @@ def make_launcher(constants, signature, ids, warp_size):
 #define __HIP_PLATFORM_AMD__
 #include <hip/hip_runtime.h>
 #include <Python.h>
-#include <dlfcn.h>
+//#include <dlfcn.h>
 #include <stdbool.h>
-#include <dlfcn.h>
+#include <Windows.h>
 
 // The list of paths to search for the HIP runtime library. The caller Python
 // code should substitute the search path placeholder.
@@ -219,9 +222,10 @@ static struct HIPSymbolTable hipSymbolTable;
 
 bool initSymbolTable() {{
   // Use the HIP runtime library loaded into the existing process if it exits.
-  void *lib = dlopen("libamdhip64.so", RTLD_NOLOAD);
+  //void *lib = dlopen("libamdhip64.so", RTLD_NOLOAD);
+  void *lib = LoadLibrary("amdhip64.dll");
   if (lib) {{
-    // printf("[triton] chosen loaded libamdhip64.so in the process\\n");
+    //printf("[triton] chosen loaded libamdhip64.so in the process\\n");
   }}
 
   // Otherwise, go through the list of search paths to dlopen the first HIP
@@ -229,28 +233,28 @@ bool initSymbolTable() {{
   if (!lib) {{
     int n = sizeof(hipLibSearchPaths) / sizeof(hipLibSearchPaths[0]);
     for (int i = 0; i < n; ++i) {{
-      void *handle = dlopen(hipLibSearchPaths[i], RTLD_LAZY | RTLD_LOCAL);
+      void *handle = LoadLibrary(hipLibSearchPaths[i]);
       if (handle) {{
         lib = handle;
-        // printf("[triton] chosen %s\\n", hipLibSearchPaths[i]);
+        //printf("[triton] chosen %s\\n", hipLibSearchPaths[i]);
       }}
     }}
   }}
   if (!lib) {{
-    PyErr_SetString(PyExc_RuntimeError, "cannot open libamdhip64.so");
+    PyErr_SetString(PyExc_RuntimeError, "cannot open amdhip64.dll");
     return false;
   }}
 
   // Resolve all symbols we are interested in.
-  dlerror(); // Clear existing errors
-  const char *error = NULL;
+  GetLastError();  // Clear existing errors
+  DWORD error = 0;
 #define QUERY_EACH_FN(hipSymbolName, ...)                                     \\
-  *(void **)&hipSymbolTable.hipSymbolName = dlsym(lib, #hipSymbolName);       \\
-  error = dlerror();                                                          \\
+  *(void **)&hipSymbolTable.hipSymbolName = GetProcAddress(lib, #hipSymbolName);       \\
+  error = GetLastError();                                                          \\
   if (error) {{                                                               \\
     PyErr_SetString(PyExc_RuntimeError,                                       \\
                     "cannot query " #hipSymbolName " from libamdhip64.so");   \\
-    dlclose(lib);                                                             \\
+    FreeLibrary(lib);                                                             \\
     return false;                                                             \\
   }}
 
@@ -432,6 +436,9 @@ class HIPDriver(GPUDriver):
     @staticmethod
     def is_active():
         import torch
+        device_name = torch.cuda.get_device_name()
+        if 'ZLUDA' in device_name or 'AMD' in device_name:
+          return True
         return torch.version.hip is not None
 
     def get_current_target(self):

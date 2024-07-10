@@ -54,17 +54,22 @@ class HIPBackend(BaseBackend):
 
     @staticmethod
     def supports_target(target: GPUTarget):
-        return target.backend == 'hip'
+        return target.backend == 'hip' or target.backend == 'cuda'
 
     def __init__(self, target: GPUTarget) -> None:
         super().__init__(target)
-        assert isinstance(target.arch, str)
+        #assert isinstance(target.arch, str)
         self.binary_ext = "hsaco"
 
     def parse_options(self, opts) -> Any:
-        args = {'arch': self.target.arch}
-        if not "enable_fp_fusion" in args:
-            args["enable_fp_fusion"] = os.getenv("TRITON_DEFAULT_FP_FUSION", "1") == "1"
+        if not isinstance(self.target.arch, str):
+            from triton.backends.amd.driver import HIPUtils
+            import torch
+            utils = HIPUtils()
+            args = {'arch': utils.get_device_properties(torch.cuda.current_device())['arch']}
+            #args = {'arch': 'gfx1100'}
+        else:
+            args = {'arch': self.target.arch}
         args.update({k: opts[k] for k in HIPOptions.__dataclass_fields__.keys() if k in opts})
         return HIPOptions(**args)
 
@@ -87,14 +92,10 @@ class HIPBackend(BaseBackend):
 
     @staticmethod
     def path_to_rocm_lld():
-        # Check env path for ld.lld
-        lld_env_path = os.getenv("TRITON_HIP_LLD_PATH")
-        if lld_env_path is not None:
-            lld = Path(lld_env_path)
-            if lld.is_file():
-                return lld
-        # Check backend for ld.lld (used for pytorch wheels)
-        lld = Path(__file__).parent / "llvm/bin/ld.lld"
+        # First check backend for ld.lld (used for pytorch wheels)
+        #lld = Path("C:\\AMD\\Rocm\\5.7\\bin\\ld.lld.exe")
+        lld = Path(os.path.join( os.environ['HIP_PATH'] , 'bin', 'ld.lld.exe' ))
+        #lld = Path(__file__).parent / "llvm/bin/ld.lld"
         if lld.is_file():
             return lld
         lld = Path("/opt/rocm/llvm/bin/ld.lld")
@@ -103,7 +104,7 @@ class HIPBackend(BaseBackend):
         lld = Path("/usr/bin/ld.lld")
         if lld.is_file():
             return lld
-        raise Exception("ROCm linker /opt/rocm/llvm/bin/ld.lld not found. Set 'TRITON_HIP_LLD_PATH' to its path.")
+        raise Exception("ROCm linker /opt/rocm/llvm/bin/ld.lld not found")
 
     @staticmethod
     def make_ttir(mod, metadata, options):
@@ -242,13 +243,29 @@ class HIPBackend(BaseBackend):
         hsaco = amd.assemble_amdgcn(src, options.arch, '')
 
         rocm_path = HIPBackend.path_to_rocm_lld()
-        with tempfile.NamedTemporaryFile() as tmp_out:
-            with tempfile.NamedTemporaryFile() as tmp_in:
-                with open(tmp_in.name, 'wb') as fd_in:
-                    fd_in.write(hsaco)
-                subprocess.check_call([rocm_path, '-flavor', 'gnu', '-shared', tmp_in.name, '-o', tmp_out.name])
-            with open(tmp_out.name, 'rb') as fd_out:
-                ret = fd_out.read()
+        
+        tmp_out = tempfile.NamedTemporaryFile("wb", delete=False)
+        tmp_out_name = tmp_out.name 
+        tmp_out.close()
+        
+        tmp_in = tempfile.NamedTemporaryFile("wb", delete=False)
+        tmp_in_name = tmp_in.name
+        tmp_in.write(hsaco)
+        tmp_in.close()
+        
+        subprocess.check_call([rocm_path, '-flavor', 'gnu', '-shared', tmp_in_name, '-o', tmp_out_name])
+        with open(tmp_out_name, 'rb') as fd_out:
+             ret = fd_out.read()
+        os.remove(tmp_in_name)
+        os.remove(tmp_out_name)
+        
+        # with tempfile.NamedTemporaryFile() as tmp_out:
+        #     with tempfile.NamedTemporaryFile() as tmp_in:
+        #         with open(tmp_in.name, 'wb') as fd_in:
+        #             fd_in.write(hsaco)
+        #         subprocess.check_call([rocm_path, '-flavor', 'gnu', '-shared', tmp_in.name, '-o', tmp_out.name])
+        #     with open(tmp_out.name, 'rb') as fd_out:
+        #         ret = fd_out.read()
         return ret
 
     def add_stages(self, stages, options):

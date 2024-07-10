@@ -22,7 +22,17 @@ def _build(name, src, srcdir, library_dirs, include_dirs, libraries):
     suffix = sysconfig.get_config_var('EXT_SUFFIX')
     so = os.path.join(srcdir, '{name}{suffix}'.format(name=name, suffix=suffix))
     # try to avoid setuptools if possible
-    cc = os.environ.get("CC")
+    
+    import torch
+    device_name = torch.cuda.get_device_name()
+    if '[ZLUDA]' in device_name or 'AMD' in device_name:
+      clang = os.path.join(os.environ['HIP_PATH'], 'bin', 'clang.exe')
+      print("Using HIP SDK Clang.")
+      if os.path.exists(clang):
+        cc = clang
+    else:
+        cc = os.environ.get("CC")
+        
     if cc is None:
         # TODO: support more things here.
         clang = shutil.which("clang")
@@ -42,10 +52,18 @@ def _build(name, src, srcdir, library_dirs, include_dirs, libraries):
     py_include_dir = sysconfig.get_paths(scheme=scheme)["include"]
     custom_backend_dirs = set(os.getenv(var) for var in ('TRITON_CUDACRT_PATH', 'TRITON_CUDART_PATH'))
     include_dirs = include_dirs + [srcdir, py_include_dir, *custom_backend_dirs]
-    cc_cmd = [cc, src, "-O3", "-shared", "-fPIC", "-o", so]
+    
+    import site
+    library_dirs += [ os.path.join(site.getsitepackages()[0], 'libs') ]
+    library_dirs += [ os.path.join(os.environ['HIP_PATH'], 'lib')]
+
+    cc_cmd = [cc, src, "-O3", "-shared", "-o", so]
+    #cc_cmd = [cc, src, "-O3", "-shared", "-fPIC", "-o", so]
     cc_cmd += [f'-l{lib}' for lib in libraries]
     cc_cmd += [f"-L{dir}" for dir in library_dirs]
     cc_cmd += [f"-I{dir}" for dir in include_dirs if dir is not None]
+    
+    
     ret = subprocess.check_call(cc_cmd)
     if ret == 0:
         return so

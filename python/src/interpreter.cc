@@ -6,7 +6,7 @@
 #include <type_traits>
 
 namespace py = pybind11;
-
+#if 0
 namespace {
 
 enum class MemSemantic { ACQUIRE_RELEASE, ACQUIRE, RELEASE, RELAXED };
@@ -303,10 +303,10 @@ makeAtomicRMWOp(pybind11::dtype dtype, const uint64_t *ptr, const void *val,
 }
 
 } // namespace
-
+#endif
 void init_triton_interpreter(py::module &&m) {
   using ret = py::return_value_policy;
-
+/*
   py::enum_<MemSemantic>(m, "MEM_SEMANTIC", py::module_local())
       .value("ACQUIRE_RELEASE", MemSemantic::ACQUIRE_RELEASE)
       .value("ACQUIRE", MemSemantic::ACQUIRE)
@@ -326,7 +326,7 @@ void init_triton_interpreter(py::module &&m) {
       .value("UMIN", RMWOp::UMIN)
       .value("UMAX", RMWOp::UMAX)
       .export_values();
-
+*/
   m.def("load",
         [](py::array_t<uint64_t> ptr, py::array_t<bool> mask, py::array other,
            py::dtype ret_dtype) -> py::array {
@@ -362,7 +362,7 @@ void init_triton_interpreter(py::module &&m) {
             }
           }
         });
-
+/*
   m.def("atomic_rmw",
         [](RMWOp rmw_op, py::array_t<uint64_t> ptr, py::array val,
            py::array_t<bool> mask, MemSemantic sem) -> py::array {
@@ -432,4 +432,5 @@ void init_triton_interpreter(py::module &&m) {
               .apply();
           return ret.reshape(shape);
         });
+        */
 }

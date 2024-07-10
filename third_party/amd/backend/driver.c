@@ -6,9 +6,10 @@
 // clang-format on
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
-#include <dlfcn.h>
+//#include <dlfcn.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <Windows.h>
 
 // The list of paths to search for the HIP runtime library. The caller Python
 // code should substitute the search path placeholder.
@@ -40,9 +41,7 @@ static const char *hipLibSearchPaths[] = {"/*py_libhip_search_path*/"};
                   unsigned int numOptions, hipJitOption *options,              \
                   void **optionValues)                                         \
   FOR_EACH_ERR_FN(hipModuleGetFunction, hipFunction_t *function,               \
-                  hipModule_t module, const char *kname)                       \
-  FOR_EACH_ERR_FN(hipFuncGetAttribute, int *, hipFunction_attribute attr,      \
-                  hipFunction_t function)
+                  hipModule_t module, const char *kname)
 
 // The HIP symbol table for holding resolved dynamic library symbols.
 struct HIPSymbolTable {
@@ -58,9 +57,10 @@ static struct HIPSymbolTable hipSymbolTable;
 
 bool initSymbolTable() {
   // Use the HIP runtime library loaded into the existing process if it exits.
-  void *lib = dlopen("libamdhip64.so", RTLD_NOLOAD);
+  //void *lib = dlopen("libamdhip64.so", RTLD_NOLOAD);
+  void *lib = LoadLibrary("amdhip64.dll");
   if (lib) {
-    // printf("[triton] chosen loaded libamdhip64.so in the process\n");
+    //printf("[triton] chosen loaded amdhip64.dll in the process\n");
   }
 
   // Otherwise, go through the list of search paths to dlopen the first HIP
@@ -68,7 +68,7 @@ bool initSymbolTable() {
   if (!lib) {
     int n = sizeof(hipLibSearchPaths) / sizeof(hipLibSearchPaths[0]);
     for (int i = 0; i < n; ++i) {
-      void *handle = dlopen(hipLibSearchPaths[i], RTLD_LAZY | RTLD_LOCAL);
+      void *handle = LoadLibrary(hipLibSearchPaths[i]);
       if (handle) {
         lib = handle;
         // printf("[triton] chosen %s\n", hipLibSearchPaths[i]);
@@ -76,20 +76,20 @@ bool initSymbolTable() {
     }
   }
   if (!lib) {
-    PyErr_SetString(PyExc_RuntimeError, "cannot open libamdhip64.so");
+    PyErr_SetString(PyExc_RuntimeError, "cannot open amdhip64.dll");
     return false;
   }
 
   // Resolve all symbols we are interested in.
-  dlerror(); // Clear existing errors
-  const char *error = NULL;
+  GetLastError(); // Clear existing errors
+  DWORD error = 0;
 #define QUERY_EACH_FN(hipSymbolName, ...)                                      \
-  *(void **)&hipSymbolTable.hipSymbolName = dlsym(lib, #hipSymbolName);        \
-  error = dlerror();                                                           \
+  *(void **)&hipSymbolTable.hipSymbolName = GetProcAddress(lib, #hipSymbolName);        \
+  error = GetLastError();                                                           \
   if (error) {                                                                 \
     PyErr_SetString(PyExc_RuntimeError,                                        \
-                    "cannot query " #hipSymbolName " from libamdhip64.so");    \
-    dlclose(lib);                                                              \
+                    "cannot query " #hipSymbolName " from amdhip64.dll");    \
+    FreeLibrary(lib);                                                              \
     return false;                                                              \
   }
 
@@ -132,12 +132,12 @@ static PyObject *getDeviceProperties(PyObject *self, PyObject *args) {
 
   // create a struct to hold device properties
   return Py_BuildValue(
-      "{s:i, s:i, s:i, s:i, s:i, s:i, s:s, s:i, s:i}", "max_shared_mem",
+      "{s:i, s:i, s:i, s:i, s:i, s:i, s:s, s:i}", "max_shared_mem",
       props.sharedMemPerBlock, "max_num_regs", props.regsPerBlock,
       "multiprocessor_count", props.multiProcessorCount, "sm_clock_rate",
       props.clockRate, "mem_clock_rate", props.memoryClockRate, "mem_bus_width",
       props.memoryBusWidth, "arch", props.gcnArchName, "warpSize",
-      props.warpSize, "max_threads_per_sm", props.maxThreadsPerMultiProcessor);
+      props.warpSize);
 }
 
 static PyObject *loadBinary(PyObject *self, PyObject *args) {
@@ -172,10 +172,6 @@ static PyObject *loadBinary(PyObject *self, PyObject *args) {
   // get allocated registers and spilled registers from the function
   int n_regs = 0;
   int n_spills = 0;
-  hipSymbolTable.hipFuncGetAttribute(&n_regs, HIP_FUNC_ATTRIBUTE_NUM_REGS, fun);
-  hipSymbolTable.hipFuncGetAttribute(&n_spills,
-                                     HIP_FUNC_ATTRIBUTE_LOCAL_SIZE_BYTES, fun);
-  n_spills /= 4;
   if (PyErr_Occurred()) {
     return NULL;
   }
