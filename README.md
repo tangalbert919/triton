@@ -17,6 +17,22 @@ The foundations of this project are described in the following MAPL2019 publicat
 
 The [official documentation](https://triton-lang.org) contains installation instructions and tutorials.  See also these third-party [Triton puzzles](https://github.com/srush/Triton-Puzzles), which can all be run using the Triton interpreter -- no GPU required.
 
+# Build for Windows
+
+1. clone and checkout the corresponding hash version of the LLVM from `https://github.com/llvm/llvm-project`
+
+2. build LLVM in MSVC Environment: `cmake -G Ninja -DCMAKE_BUILD_TYPE=Release -DLLVM_ENABLE_ASSERTIONS=ON ../llvm -DLLVM_ENABLE_PROJECTS="mlir;llvm" -DLLVM_TARGETS_TO_BUILD="host;NVPTX;AMDGPU"`
+
+3. Run `cmd.exe` as administrator, active MSVC Environmen.
+
+4. modify the `set_vars_.bat`, fill corresponding path of llvm library, and execute it.
+
+5. `cd` into python, run 'python setup.py bdist_wheel'
+
+6. after build done, copy `build\cmake.win-amd64-cpython-3.10\triton.dll` to 'triton\_C\libtriton.pyd'
+
+7. run `python setup.py develop`
+
 # Quick Installation
 
 You can install the latest stable release of Triton from pip:
