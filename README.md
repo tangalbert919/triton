@@ -27,7 +27,7 @@ The [official documentation](https://triton-lang.org) contains installation inst
 
 4. modify the `set_vars_.bat`, fill corresponding path of llvm library, and execute it.
 
-5. `cd` into python, run 'python setup.py bdist_wheel'
+5. `cd` into python dir, run `python setup.py bdist_wheel`
 
 6. after build done, copy `build\cmake.win-amd64-cpython-3.10\triton.dll` to 'triton\_C\libtriton.pyd'
 
