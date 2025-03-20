@@ -6,10 +6,10 @@
 // clang-format on
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
-//#include <dlfcn.h>
+#include <Windows.h>
+// #include <dlfcn.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <Windows.h>
 
 // The list of paths to search for the HIP runtime library. The caller Python
 // code should substitute the search path placeholder.
@@ -57,10 +57,10 @@ static struct HIPSymbolTable hipSymbolTable;
 
 bool initSymbolTable() {
   // Use the HIP runtime library loaded into the existing process if it exits.
-  //void *lib = dlopen("libamdhip64.so", RTLD_NOLOAD);
-  void *lib = LoadLibrary("amdhip64.dll");
+  // void *lib = dlopen("libamdhip64.so", RTLD_NOLOAD);
+  void *lib = LoadLibrary("amdhip64_6.dll");
   if (lib) {
-    //printf("[triton] chosen loaded amdhip64.dll in the process\n");
+    // printf("[triton] chosen loaded amdhip64_6.dll in the process\n");
   }
 
   // Otherwise, go through the list of search paths to dlopen the first HIP
@@ -76,7 +76,7 @@ bool initSymbolTable() {
     }
   }
   if (!lib) {
-    PyErr_SetString(PyExc_RuntimeError, "cannot open amdhip64.dll");
+    PyErr_SetString(PyExc_RuntimeError, "cannot open amdhip64_6.dll");
     return false;
   }
 
@@ -84,12 +84,13 @@ bool initSymbolTable() {
   GetLastError(); // Clear existing errors
   DWORD error = 0;
 #define QUERY_EACH_FN(hipSymbolName, ...)                                      \
-  *(void **)&hipSymbolTable.hipSymbolName = GetProcAddress(lib, #hipSymbolName);        \
-  error = GetLastError();                                                           \
+  *(void **)&hipSymbolTable.hipSymbolName =                                    \
+      GetProcAddress(lib, #hipSymbolName);                                     \
+  error = GetLastError();                                                      \
   if (error) {                                                                 \
     PyErr_SetString(PyExc_RuntimeError,                                        \
-                    "cannot query " #hipSymbolName " from amdhip64.dll");    \
-    FreeLibrary(lib);                                                              \
+                    "cannot query " #hipSymbolName " from amdhip64_6.dll");    \
+    FreeLibrary(lib);                                                          \
     return false;                                                              \
   }
 

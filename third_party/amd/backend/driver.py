@@ -294,7 +294,7 @@ static struct HIPSymbolTable hipSymbolTable;
 bool initSymbolTable() {{
   // Use the HIP runtime library loaded into the existing process if it exits.
   //void *lib = dlopen("libamdhip64.so", RTLD_NOLOAD);
-  void *lib = LoadLibrary("amdhip64.dll");
+  void *lib = LoadLibrary("amdhip64_6.dll");
   if (lib) {{
     //printf("[triton] chosen loaded libamdhip64.so in the process\\n");
   }}
@@ -312,7 +312,7 @@ bool initSymbolTable() {{
     }}
   }}
   if (!lib) {{
-    PyErr_SetString(PyExc_RuntimeError, "cannot open amdhip64.dll");
+    PyErr_SetString(PyExc_RuntimeError, "cannot open amdhip64_6.dll");
     return false;
   }}
 
@@ -395,11 +395,10 @@ static inline DevicePtrInfo getPointer(PyObject *obj, int idx) {{
     uint64_t dev_ptr;
     hipError_t status = hipSymbolTable.hipPointerGetAttribute(&dev_ptr, HIP_POINTER_ATTRIBUTE_DEVICE_POINTER, ptr_info.dev_ptr);
     if (status == hipErrorInvalidValue) {{
-        PyErr_Format(PyExc_ValueError,
-                     "Pointer argument (at %d) cannot be accessed from Triton (cpu tensor?)", idx);
-        ptr_info.valid = false;
+      PyErr_Format(PyExc_ValueError,
+                    "Pointer argument (at %d) cannot be accessed from Triton (cpu tensor?)", idx);
+      ptr_info.valid = false;
     }}
-    ptr_info.dev_ptr = (hipDeviceptr_t)dev_ptr;
     Py_DECREF(ret);
     return ptr_info;
   }}
@@ -517,11 +516,11 @@ class HIPDriver(GPUDriver):
 
     @staticmethod
     def is_active():
-        try:
-            import torch
-            return torch.version.hip is not None
-        except ImportError:
-            return False
+        import torch
+        cc = torch.cuda.get_device_capability()
+        if cc == (8, 8):
+            return True
+        return torch.version.hip is not None
 
     def get_current_target(self):
         device = self.get_current_device()

@@ -8,17 +8,17 @@ def _build(name, src, srcdir, library_dirs, include_dirs, libraries):
     suffix = sysconfig.get_config_var('EXT_SUFFIX')
     so = os.path.join(srcdir, '{name}{suffix}'.format(name=name, suffix=suffix))
     # try to avoid setuptools if possible
-    
+
     import torch
-    device_name = torch.cuda.get_device_name()
-    if '[ZLUDA]' in device_name or 'AMD' in device_name:
-      clang = os.path.join(os.environ['HIP_PATH'], 'bin', 'clang.exe')
-      print("Using HIP SDK Clang.")
-      if os.path.exists(clang):
-        cc = clang
+    is_zluda = torch.cuda.get_device_capability() == (8, 8)
+    if is_zluda:
+        clang = os.path.join(os.environ['HIP_PATH'], 'bin', 'clang.exe')
+        print("Using HIP SDK Clang.")
+        if os.path.exists(clang):
+            cc = clang
     else:
         cc = os.environ.get("CC")
-        
+
     if cc is None:
         # TODO: support more things here.
         clang = shutil.which("clang")

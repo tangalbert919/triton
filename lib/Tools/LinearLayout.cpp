@@ -363,18 +363,6 @@ int32_t LinearLayout::getTotalOutDimSizeLog2() const {
                          });
 }
 
-unsigned int msvc_ctz(uint32_t x) {
-    unsigned long index;  // _BitScanForward expects an unsigned long for the index
-    if (_BitScanForward(&index, x)) {
-        return static_cast<unsigned int>(index);
-    } else {
-        // If x is 0, return the number of bits in the integer type
-        return 32;
-    }
-}
-
-#define __builtin_ctz(x) msvc_ctz(x)
-
 int32_t LinearLayout::getNumConsecutiveInOut() const {
   if (bases.empty() || getNumOutDims() == 0)
     return 1;
