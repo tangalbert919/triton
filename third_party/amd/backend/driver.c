@@ -138,7 +138,7 @@ static PyObject *getDeviceProperties(PyObject *self, PyObject *args) {
       "multiprocessor_count", props.multiProcessorCount, "sm_clock_rate",
       props.clockRate, "mem_clock_rate", props.memoryClockRate, "mem_bus_width",
       props.memoryBusWidth, "arch", props.gcnArchName, "warpSize",
-      props.warpSize);
+      props.warpSize, "max_threads_per_sm", props.maxThreadsPerMultiProcessor);
 }
 
 static PyObject *loadBinary(PyObject *self, PyObject *args) {

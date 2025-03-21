@@ -66,7 +66,6 @@ def _get_path_to_hip_runtime_dylib():
     
     #lib_name = "libamdhip64.so"
     lib_name = "amdhip64.lib"
-    #lib_name = "C://AMD//Rocm//5.7//lib//amdhip64.lib"
 
     lib_path = os.path.join( os.environ['HIP_PATH'] , 'lib', lib_name )
     if os.path.exists(lib_path):
@@ -296,7 +295,7 @@ bool initSymbolTable() {{
   //void *lib = dlopen("libamdhip64.so", RTLD_NOLOAD);
   void *lib = LoadLibrary("amdhip64_6.dll");
   if (lib) {{
-    //printf("[triton] chosen loaded libamdhip64.so in the process\\n");
+    //printf("[triton] chosen loaded amdhip64_6.dll in the process\\n");
   }}
 
   // Otherwise, go through the list of search paths to dlopen the first HIP
@@ -324,7 +323,7 @@ bool initSymbolTable() {{
   error = GetLastError();                                                          \\
   if (error) {{                                                               \\
     PyErr_SetString(PyExc_RuntimeError,                                       \\
-                    "cannot query " #hipSymbolName " from libamdhip64.so");   \\
+                    "cannot query " #hipSymbolName " from amdhip64_6.dll");   \\
     FreeLibrary(lib);                                                             \\
     return false;                                                             \\
   }}
