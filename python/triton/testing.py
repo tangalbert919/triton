@@ -1,10 +1,13 @@
 import functools
+import math
 import os
+import statistics
 import subprocess
 import sys
 from contextlib import contextmanager
 from typing import Any, Dict, List
 from . import language as tl
+from . import runtime
 
 
 def nvsmi(attrs):
@@ -16,7 +19,45 @@ def nvsmi(attrs):
     return ret
 
 
-def do_bench_cudagraph(fn, rep=20, grad_to_none=None, return_mode="mean"):
+# pure Python implementation of np.quantile/torch.quantile
+# to avoid unnecessary runtime dependency on numpy/torch
+
+
+def _quantile(a, q):
+    n = len(a)
+    a = sorted(a)
+
+    def get_quantile(q):
+        if not (0 <= q <= 1):
+            raise ValueError("Quantiles must be in the range [0, 1]")
+        point = q * (n - 1)
+        lower = math.floor(point)
+        upper = math.ceil(point)
+        t = point - lower
+        return (1 - t) * a[lower] + t * a[upper]
+
+    return [get_quantile(q) for q in q]
+
+
+def _summarize_statistics(times, quantiles, return_mode):
+    if quantiles is not None:
+        ret = _quantile(times, quantiles)
+        if len(ret) == 1:
+            ret = ret[0]
+        return ret
+    if return_mode == "all":
+        return times
+    elif return_mode == "min":
+        return min(times)
+    elif return_mode == "max":
+        return max(times)
+    elif return_mode == "mean":
+        return statistics.mean(times)
+    elif return_mode == "median":
+        return statistics.median(times)
+
+
+def do_bench_cudagraph(fn, rep=20, grad_to_none=None, quantiles=None, return_mode="mean"):
     """
     Benchmark the runtime of the provided function.
 
@@ -26,62 +67,60 @@ def do_bench_cudagraph(fn, rep=20, grad_to_none=None, return_mode="mean"):
     :type rep: int
     :param grad_to_none: Reset the gradient of the provided tensor to None
     :type grad_to_none: torch.tensor, optional
-    :param return_mode: The statistical measure to return. Options are "min", "max", "mean", or "median". Default is "mean".
+    :param return_mode: The statistical measure to return. Options are "min", "max", "mean", "median", or "all". Default is "mean".
     :type return_mode: str
     """
     import torch
-    assert return_mode in ["min", "max", "mean", "median"]
+    assert return_mode in ["min", "max", "mean", "median", "all"]
 
-    if torch.cuda.current_stream() == torch.cuda.default_stream():
-        raise RuntimeError("Cannot capture graph in default stream. Please use side stream in benchmark code.")
-    # warmup
-    fn()
-    # step 1 - we estimate the amount of time the kernel call takes
-    # NOTE: this estimate isn't super accurate because the GPU isn't warmed up at this point
-    #       but it is probably good enough
-    if grad_to_none is not None:
-        for x in grad_to_none:
-            x.detach_()
-            x.requires_grad_(True)
-            x.grad = None
-    g = torch.cuda.CUDAGraph()
-    with torch.cuda.graph(g):
+    with torch.cuda.stream(torch.cuda.Stream()):
+        # warmup
         fn()
-    torch.cuda.synchronize()
-    start_event = torch.cuda.Event(enable_timing=True)
-    end_event = torch.cuda.Event(enable_timing=True)
-    start_event.record()
-    g.replay()
-    end_event.record()
-    torch.cuda.synchronize()
-    estimate_ms = start_event.elapsed_time(end_event)
-    n_repeat = max(1, int(rep / estimate_ms))
-    # step 2 - construct a cuda graph with `n_repeat` unrolled function calls to minimize
-    # host overhead
-    g = torch.cuda.CUDAGraph()
-    with torch.cuda.graph(g):
-        for _ in range(n_repeat):
-            if grad_to_none is not None:
-                for x in grad_to_none:
-                    x.grad = None
-            fn()
-    torch.cuda.synchronize()
-    # measure time and return
-    ret = []
-    n_retries = 10
-    for _ in range(n_retries):
+        if grad_to_none is not None:
+            for x in grad_to_none:
+                x.detach_()
+                x.requires_grad_(True)
+                x.grad = None
+        # step 1 - we estimate the amount of time the kernel call takes
+        # NOTE: this estimate isn't super accurate because the GPU isn't warmed up at this point
+        #       but it is probably good enough
+        # NOTE: we don't use a graph to estimate the runtime because creating a graph is expensive,
+        #       ~300ms on A100, so we default to the same method used in `do_bench` (minus the L2
+        #       cache flush).
         start_event = torch.cuda.Event(enable_timing=True)
         end_event = torch.cuda.Event(enable_timing=True)
         start_event.record()
-        g.replay()
+        for _ in range(5):
+            fn()
         end_event.record()
         torch.cuda.synchronize()
-        ret += [start_event.elapsed_time(end_event) / n_repeat]
-    times = torch.tensor(ret)
-    return getattr(torch, return_mode)(times).item()
+        estimate_ms = start_event.elapsed_time(end_event) / 5
+        n_repeat = max(1, int(rep / estimate_ms))
+        # step 2 - construct a cuda graph with `n_repeat` unrolled function calls to minimize
+        # host overhead
+        g = torch.cuda.CUDAGraph()
+        with torch.cuda.graph(g):
+            for _ in range(n_repeat):
+                if grad_to_none is not None:
+                    for x in grad_to_none:
+                        x.grad = None
+                fn()
+        torch.cuda.synchronize()
+        # measure time and return
+        ret = []
+        n_retries = 10
+        for _ in range(n_retries):
+            start_event = torch.cuda.Event(enable_timing=True)
+            end_event = torch.cuda.Event(enable_timing=True)
+            start_event.record()
+            g.replay()
+            end_event.record()
+            torch.cuda.synchronize()
+            ret += [start_event.elapsed_time(end_event) / n_repeat]
+        return _summarize_statistics(ret, quantiles, return_mode)
 
 
-def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, fast_flush=True, return_mode="mean"):
+def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, return_mode="mean"):
     """
     Benchmark the runtime of the provided function. By default, return the median runtime of :code:`fn` along with
     the 20-th and 80-th performance percentile.
@@ -96,42 +135,34 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, fast_flu
     :type grad_to_none: torch.tensor, optional
     :param quantiles: Performance percentile to return in addition to the median.
     :type quantiles: list[float], optional
-    :param fast_flush: Use faster kernel to flush L2 cache between measurements
-    :type fast_flush: bool, default is True
-    :param return_mode: The statistical measure to return. Options are "min", "max", "mean", or "median". Default is "mean".
+    :param return_mode: The statistical measure to return. Options are "min", "max", "mean", "median", or "all". Default is "mean".
     :type return_mode: str
     """
-    assert return_mode in ["min", "max", "mean", "median"]
-    import torch
+    assert return_mode in ["min", "max", "mean", "median", "all"]
+
+    di = runtime.driver.active.get_device_interface()
 
     fn()
-    torch.cuda.synchronize()
+    di.synchronize()
 
-    # We maintain a buffer of 256 MB that we clear
-    # before each kernel call to make sure that the L2 cache
-    # doesn't contain any input data before the run
-    cache_size = 256 * 1024 * 1024
-    if fast_flush:
-        cache = torch.empty(int(cache_size // 4), dtype=torch.int, device='cuda')
-    else:
-        cache = torch.empty(int(cache_size), dtype=torch.int8, device='cuda')
+    cache = runtime.driver.active.get_empty_cache_for_benchmark()
 
     # Estimate the runtime of the function
-    start_event = torch.cuda.Event(enable_timing=True)
-    end_event = torch.cuda.Event(enable_timing=True)
+    start_event = di.Event(enable_timing=True)
+    end_event = di.Event(enable_timing=True)
     start_event.record()
     for _ in range(5):
-        cache.zero_()
+        runtime.driver.active.clear_cache(cache)
         fn()
     end_event.record()
-    torch.cuda.synchronize()
+    di.synchronize()
     estimate_ms = start_event.elapsed_time(end_event) / 5
 
     # compute number of warmup and repeat
     n_warmup = max(1, int(warmup / estimate_ms))
     n_repeat = max(1, int(rep / estimate_ms))
-    start_event = [torch.cuda.Event(enable_timing=True) for i in range(n_repeat)]
-    end_event = [torch.cuda.Event(enable_timing=True) for i in range(n_repeat)]
+    start_event = [di.Event(enable_timing=True) for i in range(n_repeat)]
+    end_event = [di.Event(enable_timing=True) for i in range(n_repeat)]
     # Warm-up
     for _ in range(n_warmup):
         fn()
@@ -144,20 +175,15 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, fast_flu
             for x in grad_to_none:
                 x.grad = None
         # we clear the L2 cache before each run
-        cache.zero_()
+        runtime.driver.active.clear_cache(cache)
         # record time of `fn`
         start_event[i].record()
         fn()
         end_event[i].record()
     # Record clocks
-    torch.cuda.synchronize()
-    times = torch.tensor([s.elapsed_time(e) for s, e in zip(start_event, end_event)], dtype=torch.float)
-    if quantiles is not None:
-        ret = torch.quantile(times, torch.tensor(quantiles, dtype=torch.float)).tolist()
-        if len(ret) == 1:
-            ret = ret[0]
-        return ret
-    return getattr(torch, return_mode)(times).item()
+    di.synchronize()
+    times = [s.elapsed_time(e) for s, e in zip(start_event, end_event)]
+    return _summarize_statistics(times, quantiles, return_mode)
 
 
 def assert_close(x, y, atol=None, rtol=None, err_msg=''):
@@ -357,18 +383,18 @@ class Mark:
         has_single_bench = isinstance(self.benchmarks, Benchmark)
         benchmarks = [self.benchmarks] if has_single_bench else self.benchmarks
         result_dfs = []
-        if save_path:
-            # Create directory if it doesn't exist
-            os.makedirs(save_path, exist_ok=True)
-            html = open(os.path.join(save_path, "results.html"), "w")
-            html.write("<html><body>\n")
-        for bench in benchmarks:
-            result_dfs.append(self._run(bench, save_path, show_plots, print_data, **kwargs))
+        try:
+            for bench in benchmarks:
+                result_dfs.append(self._run(bench, save_path, show_plots, print_data, **kwargs))
+        finally:
             if save_path:
-                html.write(f"<image src=\"{bench.plot_name}.png\"/>\n")
-        if save_path:
-            html.write("</body></html>\n")
-            html.close()
+                # Create directory if it doesn't exist
+                os.makedirs(save_path, exist_ok=True)
+                with open(os.path.join(save_path, "results.html"), "w") as html:
+                    html.write("<html><body>\n")
+                    for bench in benchmarks[:len(result_dfs)]:
+                        html.write(f"<image src=\"{bench.plot_name}.png\"/>\n")
+                    html.write("</body></html>\n")
         if return_df:
             if has_single_bench:
                 return result_dfs[0]

@@ -31,10 +31,27 @@ public:
                     std::unordered_map<uint64_t, std::pair<size_t, size_t>>>;
   using ApiExternIdSet = ThreadSafeSet<size_t, std::unordered_set<size_t>>;
 
+  ConcreteProfilerT &enablePCSampling() {
+    pcSamplingEnabled = true;
+    return dynamic_cast<ConcreteProfilerT &>(*this);
+  }
+  ConcreteProfilerT &disablePCSampling() {
+    pcSamplingEnabled = false;
+    return dynamic_cast<ConcreteProfilerT &>(*this);
+  }
+  bool isPCSamplingEnabled() const { return pcSamplingEnabled; }
+
+  ConcreteProfilerT &setLibPath(const std::string &libPath) {
+    pImpl->setLibPath(libPath);
+    return dynamic_cast<ConcreteProfilerT &>(*this);
+  }
+
 protected:
   // OpInterface
   void startOp(const Scope &scope) override {
     this->correlation.pushExternId(scope.scopeId);
+    for (auto data : getDataSet())
+      data->addOp(scope.scopeId, scope.name);
   }
   void stopOp(const Scope &scope) override { this->correlation.popExternId(); }
 
@@ -45,30 +62,22 @@ protected:
 
   struct ThreadState {
     ConcreteProfilerT &profiler;
+    size_t scopeId{Scope::DummyScopeId};
 
     ThreadState(ConcreteProfilerT &profiler) : profiler(profiler) {}
 
-    void record(size_t scopeId) {
+    void enterOp() {
       if (profiler.isOpInProgress())
         return;
-      std::set<Data *> dataSet = profiler.getDataSet();
-      for (auto data : dataSet)
-        data->addScope(scopeId);
+      scopeId = Scope::getNewScopeId();
+      profiler.enterOp(Scope(scopeId));
       profiler.correlation.apiExternIds.insert(scopeId);
-    }
-
-    void enterOp(size_t scopeId) {
-      if (profiler.isOpInProgress())
-        return;
-      profiler.correlation.pushExternId(scopeId);
-      profiler.setOpInProgress(true);
     }
 
     void exitOp() {
       if (!profiler.isOpInProgress())
         return;
-      profiler.correlation.popExternId();
-      profiler.setOpInProgress(false);
+      profiler.exitOp(Scope(scopeId));
     }
   };
 
@@ -132,6 +141,7 @@ protected:
         : profiler(profiler) {}
     virtual ~GPUProfilerPimplInterface() = default;
 
+    virtual void setLibPath(const std::string &libPath) = 0;
     virtual void doStart() = 0;
     virtual void doFlush() = 0;
     virtual void doStop() = 0;
@@ -140,6 +150,8 @@ protected:
     ConcreteProfilerT &profiler;
   };
   std::unique_ptr<GPUProfilerPimplInterface> pImpl;
+
+  bool pcSamplingEnabled{false};
 };
 
 } // namespace proton

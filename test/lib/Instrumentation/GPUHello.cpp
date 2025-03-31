@@ -1,4 +1,5 @@
 #include "llvm/IR/IRBuilder.h"
+#include "llvm/IR/Module.h"
 #include "llvm/IR/PassManager.h"
 #include "llvm/Pass.h"
 #include "llvm/Passes/PassBuilder.h"
@@ -58,9 +59,9 @@ bool GpuHello::runOnModule(Module &module) {
   return modifiedCodeGen;
 }
 
-PassPluginLibraryInfo getPassPluginInfo() {
+static PassPluginLibraryInfo getPassPluginInfo() {
   const auto callback = [](PassBuilder &pb) {
-    pb.registerOptimizerLastEPCallback([&](ModulePassManager &mpm, auto) {
+    pb.registerOptimizerLastEPCallback([&](ModulePassManager &mpm, auto, auto) {
       mpm.addPass(GpuHello());
       return true;
     });
