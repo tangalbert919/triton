@@ -693,11 +693,11 @@ def get_packages():
         "triton/runtime",
         "triton/backends",
         "triton/tools",
-        "triton/tools/extra",
+        #"triton/tools/extra",
     ]
     packages += [f'triton/backends/{backend.name}' for backend in backends]
     packages += get_extra_packages("language")
-    packages += get_extra_packages("tools")
+    #packages += get_extra_packages("tools")
     if check_env_flag("TRITON_BUILD_PROTON", "ON"):  # Default ON
         packages += ["triton/profiler"]
 
