@@ -516,10 +516,14 @@ class HIPDriver(GPUDriver):
     @staticmethod
     def is_active():
         import torch
+        if not torch.cuda.is_available():
+            return False
+        if torch.version.hip is not None:
+            return True
         cc = torch.cuda.get_device_capability()
         if cc == (8, 8):
             return True
-        return torch.version.hip is not None
+        return False
 
     def get_current_target(self):
         device = self.get_current_device()
