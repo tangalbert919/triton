@@ -1,8 +1,7 @@
 
-set LIB=C:\Users\14408\AppData\Local\Programs\Python\Python310\libs;%LIB%
-set LLVM_BUILD_DIR=F:\Triton_win\LLVM-19.0.0git-win64
-set LLVM_INCLUDE_DIRS=F:\Triton_win\LLVM-19.0.0git-win64\include
-set LLVM_LIBRARY_DIR=F:\Triton_win\LLVM-19.0.0git-win64\lib 
-set LLVM_SYSPATH=F:\Triton_win\LLVM-19.0.0git-win64
-set MLIR_DIR=F:\Triton_win\LLVM-19.0.0git-win64\lib\cmake\mlir
-
+set LIB=PATH\TO\Python\Python311\libs;%LIB%
+set LLVM_BUILD_DIR=deps\llvm-project\build
+set LLVM_INCLUDE_DIRS=%LLVM_BUILD_DIR%\include
+set LLVM_LIBRARY_DIR=%LLVM_BUILD_DIR%\lib
+set LLVM_SYSPATH=%LLVM_BUILD_DIR%
+set MLIR_DIR=%LLVM_BUILD_DIR%\lib\cmake\mlir

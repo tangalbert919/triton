@@ -2,8 +2,8 @@
   <img src="https://lh5.googleusercontent.com/wzQKEsTFkrgNQO9JjhGH5wFvslJr1saLtLaJ_a6Fp_gNENpvt3VG7BmztwngU9hFJaU4CPwGiw1opQtDvTkLrxWRbO_a12Q-pdESWHgtmheIHcPbOL5ZMC4TSiJVe5ty1w=w3517" alt="Triton logo">
 </div>
 
-| **`Documentation`** | **`Nightly Wheels`** |
-|-------------------- | -------------------- |
+| **`Documentation`**                                                                                                               | **`Nightly Wheels`**                                                                                                                                          |
+| --------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | [![Documentation](https://github.com/triton-lang/triton/actions/workflows/documentation.yml/badge.svg)](https://triton-lang.org/) | [![Wheels](https://github.com/triton-lang/triton/actions/workflows/wheels.yml/badge.svg)](https://github.com/triton-lang/triton/actions/workflows/wheels.yml) |
 
 # Triton
@@ -12,23 +12,21 @@ This is the development repository of Triton, a language and compiler for writin
 
 The foundations of this project are described in the following MAPL2019 publication: [Triton: An Intermediate Language and Compiler for Tiled Neural Network Computations](http://www.eecs.harvard.edu/~htk/publication/2019-mapl-tillet-kung-cox.pdf). Please consider citing this work if you use Triton!
 
-The [official documentation](https://triton-lang.org) contains installation instructions and tutorials.  See also these third-party [Triton puzzles](https://github.com/srush/Triton-Puzzles), which can all be run using the Triton interpreter -- no GPU required.
+The [official documentation](https://triton-lang.org) contains installation instructions and tutorials. See also these third-party [Triton puzzles](https://github.com/srush/Triton-Puzzles), which can all be run using the Triton interpreter -- no GPU required.
 
 # Build for Windows
 
-1. clone and checkout the corresponding hash version of the LLVM from `https://github.com/llvm/llvm-project`
+1. Clone and checkout the corresponding hash version (see cmake/llvm-hash.txt) of the LLVM from `https://github.com/llvm/llvm-project` into `deps/llvm-project`.
 
-2. build LLVM in MSVC Environment: `cmake -G Ninja -DCMAKE_BUILD_TYPE=Release -DLLVM_ENABLE_ASSERTIONS=ON ../llvm -DLLVM_ENABLE_PROJECTS="mlir;llvm" -DLLVM_TARGETS_TO_BUILD="host;NVPTX;AMDGPU"`
+2. Build LLVM in MSVC Environment: `cmake -G Ninja -DCMAKE_BUILD_TYPE=Release ../llvm -DLLVM_ENABLE_PROJECTS="mlir;llvm" -DLLVM_TARGETS_TO_BUILD="host;NVPTX;AMDGPU"`
 
-3. Run `cmd.exe` as administrator, active MSVC Environmen.
+3. modify the `set_vars_.bat`, and execute it.
 
-4. modify the `set_vars_.bat`, fill corresponding path of llvm library, and execute it.
+4. Run `python setup.py bdist_wheel`.
 
-5. `cd` into python dir, run `python setup.py bdist_wheel`
+5. after build done, copy `build\cmake.win-amd64-cpython-3.11\libtriton.pyd` to 'triton_C\libtriton.pyd'.
 
-6. after build done, copy `build\cmake.win-amd64-cpython-3.10\triton.dll` to 'triton\_C\libtriton.pyd'
-
-7. run `python setup.py develop`
+6. run `python setup.py develop`
 
 # Quick Installation
 
@@ -48,9 +46,9 @@ generation tensor cores. To enable this, you will need two additional steps:
 1. Build a pre-release PyTorch from source with CUDA 12.8
 2. Build triton from the latest source
 
-
 First, to build pytorch you need to have CUDA 12.8 installed locally. If not,
 follow the [instructions for your platform](https://developer.nvidia.com/cuda-downloads)
+
 ```bash
 # Clone and checkout pytorch 2.6 release candidate
 git clone https://github.com/pytorch/pytorch
@@ -105,47 +103,48 @@ pip install -e .
 
 # Building with a custom LLVM
 
-Triton uses LLVM to generate code for GPUs and CPUs.  Normally, the Triton build
+Triton uses LLVM to generate code for GPUs and CPUs. Normally, the Triton build
 downloads a prebuilt LLVM, but you can also build LLVM from source and use that.
 
 LLVM does not have a stable API, so the Triton build will not work at an
 arbitrary LLVM version.
 
-1. Find the version of LLVM that Triton builds against.  Check
-`cmake/llvm-hash.txt` to see the current version. For example, if it says:
-       49af6502c6dcb4a7f7520178bd14df396f78240c
+1. Find the version of LLVM that Triton builds against. Check
+   `cmake/llvm-hash.txt` to see the current version. For example, if it says:
+   49af6502c6dcb4a7f7520178bd14df396f78240c
 
    This means that the version of Triton you have builds against
    [LLVM](https://github.com/llvm/llvm-project) 49af6502.
 
-2. `git checkout` LLVM at this revision.  Optionally, make additional
+2. `git checkout` LLVM at this revision. Optionally, make additional
    modifications to LLVM.
 
-3. [Build LLVM](https://llvm.org/docs/CMake.html).  For example, you might run
+3. [Build LLVM](https://llvm.org/docs/CMake.html). For example, you might run
 
-       $ cd $HOME/llvm-project  # your clone of LLVM.
-       $ mkdir build
-       $ cd build
-       $ cmake -G Ninja -DCMAKE_BUILD_TYPE=Release -DLLVM_ENABLE_ASSERTIONS=ON ../llvm -DLLVM_ENABLE_PROJECTS="mlir;llvm;lld" -DLLVM_TARGETS_TO_BUILD="host;NVPTX;AMDGPU"
-       $ ninja
+   $ cd $HOME/llvm-project # your clone of LLVM.
+   $ mkdir build
+   $ cd build
+   $ cmake -G Ninja -DCMAKE_BUILD_TYPE=Release -DLLVM_ENABLE_ASSERTIONS=ON ../llvm -DLLVM_ENABLE_PROJECTS="mlir;llvm;lld" -DLLVM_TARGETS_TO_BUILD="host;NVPTX;AMDGPU"
+   $ ninja
 
 4. Grab a snack, this will take a while.
 
 5. Build Triton as above, but set the following environment variables.
 
-       # Modify as appropriate to point to your LLVM build.
-       $ export LLVM_BUILD_DIR=$HOME/llvm-project/build
+   # Modify as appropriate to point to your LLVM build.
 
-       $ cd <triton install>
-       $ LLVM_INCLUDE_DIRS=$LLVM_BUILD_DIR/include \
+   $ export LLVM_BUILD_DIR=$HOME/llvm-project/build
+
+   $ cd <triton install>
+   $ LLVM_INCLUDE_DIRS=$LLVM_BUILD_DIR/include \
          LLVM_LIBRARY_DIR=$LLVM_BUILD_DIR/lib \
-         LLVM_SYSPATH=$LLVM_BUILD_DIR \
-         pip install -e .
+    LLVM_SYSPATH=$LLVM_BUILD_DIR \
+    pip install -e .
 
 # Tips for building
 
 - Set `TRITON_BUILD_WITH_CLANG_LLD=true` as an environment variable to use clang
-  and lld.  lld in particular results in faster builds.
+  and lld. lld in particular results in faster builds.
 
 - Set `TRITON_BUILD_WITH_CCACHE=true` to build with ccache.
 
@@ -164,19 +163,19 @@ arbitrary LLVM version.
 
 - vscode intellisense has some difficulty figuring out how to build Triton's C++
   (probably because, in our build, users don't invoke cmake directly, but
-  instead use setup.py).  Teach vscode how to compile Triton as follows.
+  instead use setup.py). Teach vscode how to compile Triton as follows.
 
-    - Do a local build. Run command `pip install -e .`
-    - Get the full path to the `compile_commands.json` file produced by the build:
-      `find ./build -name 'compile_commands.json' | xargs readlink -f`.
-      You might get a full path similar to `/Users/{username}/triton/build/cmake.macosx-11.1-arm64-cpython-3.12/compile_commands.json`
-    - In vscode, install the
-      [C/C++
-      extension](https://marketplace.visualstudio.com/items?itemName=ms-vscode.cpptools),
-      then open the command palette (`Shift + Command + P` on Mac, or `Shift +
-      Ctrl + P` on Windows/Linux) and open `C/C++: Edit Configurations (UI)`.
-    - Open "Advanced Settings" and paste the full path to
-      `compile_commands.json` into the "Compile Commands" textbox.
+  - Do a local build. Run command `pip install -e .`
+  - Get the full path to the `compile_commands.json` file produced by the build:
+    `find ./build -name 'compile_commands.json' | xargs readlink -f`.
+    You might get a full path similar to `/Users/{username}/triton/build/cmake.macosx-11.1-arm64-cpython-3.12/compile_commands.json`
+  - In vscode, install the
+    [C/C++
+    extension](https://marketplace.visualstudio.com/items?itemName=ms-vscode.cpptools),
+    then open the command palette (`Shift + Command + P` on Mac, or `Shift +
+Ctrl + P` on Windows/Linux) and open `C/C++: Edit Configurations (UI)`.
+  - Open "Advanced Settings" and paste the full path to
+    `compile_commands.json` into the "Compile Commands" textbox.
 
 # Running tests
 
@@ -204,7 +203,7 @@ For detailed instructions on how to debug Triton's frontend, please refer to thi
 See [`python/triton/knobs.py`](python/triton/knobs.py) for the full list of configuration knobs. You can set those knobs directly in python or use environment variables to control them. Below are some of the environment variables you can specify (see `knobs.py` for the full list):
 
 - `MLIR_ENABLE_DUMP=1` dumps the IR before every MLIR pass Triton runs, for all
-   kernels. Use `MLIR_ENABLE_DUMP=kernelName` to dump for a specific kernel only.
+  kernels. Use `MLIR_ENABLE_DUMP=kernelName` to dump for a specific kernel only.
   - Triton cache can interfere with the dump. In cases where `MLIR_ENABLE_DUMP=1` does not work, try cleaning your triton cache: `rm -r ~/.triton/cache/*`
 - `MLIR_DUMP_PATH` specifies where `MLIR_ENABLE_DUMP` will dump to. If unset will dump to stderr.
 - `LLVM_IR_ENABLE_DUMP=1` dumps the IR before every pass run over the LLVM IR.
@@ -212,19 +211,20 @@ See [`python/triton/knobs.py`](python/triton/knobs.py) for the full list of conf
   at `<reproducer_path>` before each MLIR compiler stage. If any of the stages fail,
   `<reproducer_path>` will be a local MLIR reproducer captured right before the failing pass.
 - `TRITON_INTERPRET=1` uses the Triton interpreter instead of running on the
-  GPU.  You can insert Python breakpoints in your kernel code!
+  GPU. You can insert Python breakpoints in your kernel code!
 - `TRITON_ENABLE_LLVM_DEBUG=1` passes `-debug` to LLVM, printing a lot of
-  debugging information to stdout.  If this is too noisy, run with just
+  debugging information to stdout. If this is too noisy, run with just
   `TRITON_LLVM_DEBUG_ONLY` instead to limit the output.
 
   An alternative way to reduce output noisiness is running with
   `LLVM_IR_ENABLE_DUMP=1`, extract the IR before the LLVM pass of interest, and
   then run LLVM's `opt` standalone, perhaps passing `-debug-only=foo` on the
   command line.
+
 - `TRITON_LLVM_DEBUG_ONLY=<comma-separated>` is the equivalent of LLVM's
   `-debug-only` command-line option. This limits the LLVM debug output to
   specific pass or component names (which are specified using `#define
-  DEBUG_TYPE` throughout LLVM and Triton) in order to allow the debug output to
+DEBUG_TYPE` throughout LLVM and Triton) in order to allow the debug output to
   be less noisy. `TRITON_LLVM_DEBUG_ONLY` allows for one or more comma
   separated values to be specified (eg
   `TRITON_LLVM_DEBUG_ONLY="tritongpu-remove-layout-conversions"` or
@@ -285,7 +285,6 @@ export TRITON_OVERRIDE_DIR=<override_dir>
 # Step 4: Run the kernel again to see the overridden result
 ```
 
-
 # Changelog
 
 Version 2.0 is out! New features include:
@@ -317,6 +316,7 @@ Supported Hardware:
 the [triton-dev-containers repository](https://github.com/redhat-et/triton-dev-containers)
 
 ### Key Benefits:
+
 - **Consistency**: All developers can work with the same development
   environment, ensuring uniform behavior across different systems.
 - **Isolation**: The container prevents potential conflicts with software
