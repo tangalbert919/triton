@@ -803,7 +803,25 @@ def test_slice(device):
         t = data[None, :]
         tl.static_assert(t.shape == [1, XBLOCK])
 
+        t = data[None, None:]
+        tl.static_assert(t.shape == [1, XBLOCK])
+
+        t = data[None, :None]
+        tl.static_assert(t.shape == [1, XBLOCK])
+
         t = data[None, :, None]
+        tl.static_assert(t.shape == [1, XBLOCK, 1])
+
+        t = data[None, None:None, None]
+        tl.static_assert(t.shape == [1, XBLOCK, 1])
+
+        t = data[None, None:None:None, None]
+        tl.static_assert(t.shape == [1, XBLOCK, 1])
+
+        t = data[None, ::None, None]
+        tl.static_assert(t.shape == [1, XBLOCK, 1])
+
+        t = data[None, None::None, None]
         tl.static_assert(t.shape == [1, XBLOCK, 1])
 
         scalar = tl.full([], 1, tl.int32)
@@ -1869,6 +1887,20 @@ def test_atomic_min_max_neg_zero(device):
     kernel[(N_PROG, )](inp, out_max, out_min)
     torch.testing.assert_close(out_min, inp, atol=0, rtol=0)
     torch.testing.assert_close(out_max, inp, atol=0, rtol=0)
+
+
+@pytest.mark.parametrize("dtype_str", ["float8_e4m3fn", "bfloat16", "int8", "int16", "uint8", "uint16"])
+def test_atomic_unsupported_type(dtype_str, device):
+
+    @triton.jit
+    def kernel(I, O):
+        x = tl.load(I)
+        tl.atomic_add(O, x)
+
+    I = torch.zeros((1, ), device=device, dtype=getattr(torch, dtype_str))
+    O = torch.zeros((1, ), device=device, dtype=getattr(torch, dtype_str))
+    with pytest.raises(triton.TritonError):
+        kernel[(1, )](I, O)
 
 
 # ---------------
@@ -3530,7 +3562,7 @@ def get_test_dot_softmax():
 
 # M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dtype, out_dtype, kpack, mma_nonk_size
 def get_test_dot_mixed_sizes_cases():
-    available_kpack = [1, 2 if is_hip() else 1]
+    available_kpack = [1, 2 if (is_hip() and not is_hip_cdna4()) else 1]
     available_precision = ["tf32" if is_cuda() else "ieee"]
     return [
         (*shape_nw, col_a, col_b, 'none', input_precision, in_dtype, out_dtype, kpack, None)
@@ -3604,9 +3636,17 @@ def get_test_dot_double_rate_cases():
             (16, 16, 32, 4, False, False, 'None', 'ieee', 'bfloat16', 'float32', 1, None)]
 
 
+def get_test_dot_vdot2_cases():
+    if not is_hip_cdna():
+        return []
+    return [(4, 32, 32, 4, False, False, 'None', 'ieee', 'float16', 'float32', 1, None),
+            (4, 32, 32, 4, False, False, 'None', 'ieee', 'bfloat16', 'float32', 1, None)]
+
+
 @pytest.mark.interpreter
 @pytest.mark.parametrize(
     "M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dtype, out_dtype, kpack, mma_nonk_size",
+    get_test_dot_vdot2_cases() + \
     get_test_dot_double_rate_cases() + \
     get_test_dot_base_cases() + \
     get_test_dot_mixed_sizes_cases() + \
@@ -3799,8 +3839,20 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
     else:
         # added atol, to loose precision for float16xfloat16->float32 case
         np.testing.assert_allclose(z_ref, to_numpy(z_tri), rtol=0.01, atol=1e-3)
-    if not is_cuda():
+
+    if not (is_cuda() or is_hip_cdna()):
         return
+
+    if is_hip_cdna():
+        if M != 4:
+            return
+        amdgcn = pgm.asm['amdgcn']
+        if in_dtype == 'float16':
+            assert 'v_dot2c_f32_f16' in amdgcn
+        elif (in_dtype == 'bfloat16') and is_hip_cdna4():
+            assert 'v_dot2c_f32_bf16' in amdgcn
+        return
+
     # make sure ld/st are vectorized
     ptx = pgm.asm['ptx']
     if (K > 16 or N > 16 or M > 16) and (M * N // (num_warps * 32) >= 4):
@@ -3860,7 +3912,7 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
                           for mxfp_type in ["e2m1", "e4m3", "e5m2"]
                           for normal_type in ["e4m3", "e5m2", "bf16", "fp16"]
                           for mma in (mma_nonk_sizes if is_hip() else [16])
-                          for kpack in ([1, 2] if is_hip() else [1])])
+                          for kpack in ([1, 2] if (is_hip() and not is_hip_cdna4()) else [1])])
 def test_scaled_dot(M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type, num_warps, mma, kpack, device):
     if is_cuda():
         cc = torch.cuda.get_device_capability()
@@ -6584,6 +6636,7 @@ def test_enable_fp_fusion(enable_fp_fusion, default_override, device):
     data = torch.randn((128, ), device=device, dtype=torch.float32)
     if default_override:
         os.environ["TRITON_DEFAULT_FP_FUSION"] = "1" if enable_fp_fusion else "0"
+        assert triton.knobs.language.default_fp_fusion == enable_fp_fusion
         h = mul_add[(1, )](data)
     else:
         h = mul_add[(1, )](data, enable_fp_fusion=enable_fp_fusion)

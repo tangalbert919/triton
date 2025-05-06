@@ -2,12 +2,14 @@ import functools
 import os
 import hashlib
 import subprocess
+import sysconfig
 import tempfile
 from pathlib import Path
 from triton.runtime.build import _build
+from triton import knobs
 from triton.runtime.cache import get_cache_manager
 from triton.backends.compiler import GPUTarget
-from triton.backends.driver import GPUDriver
+from triton.backends.driver import GPUDriver, platform_key
 
 dirname = os.path.dirname(os.path.realpath(__file__))
 include_dir = [os.path.join(dirname, "include")]
@@ -72,8 +74,7 @@ def _get_path_to_hip_runtime_dylib():
       return lib_path.replace('\\','\\\\')
 
     # If we are told explicitly what HIP runtime dynamic library to use, obey that.
-    env_libhip_path = os.getenv("TRITON_LIBHIP_PATH")
-    if env_libhip_path:
+    if env_libhip_path := knobs.amd.libhip_path:
         if env_libhip_path.endswith(lib_name) and os.path.exists(env_libhip_path):
             return env_libhip_path
         raise RuntimeError(f"TRITON_LIBHIP_PATH '{env_libhip_path}' does not point to a valid {lib_name}")
@@ -86,6 +87,12 @@ def _get_path_to_hip_runtime_dylib():
         raise RuntimeError(f"memory mapped '{mmapped_path}' in process does not point to a valid {lib_name}")
 
     paths = []
+
+    # Check backend
+    local_lib = os.path.join(os.path.dirname(__file__), "lib", lib_name)
+    if os.path.exists(local_lib):
+        return local_lib
+    paths.append(local_lib)
 
     import site
     # First search the HIP runtime dynamic library packaged with PyTorch. It's very likely
@@ -127,9 +134,10 @@ def _get_path_to_hip_runtime_dylib():
 
 
 def compile_module_from_src(src, name):
-    key = hashlib.sha256(src.encode("utf-8")).hexdigest()
+    key = hashlib.sha256((src + platform_key()).encode("utf-8")).hexdigest()
     cache = get_cache_manager(key)
-    cache_path = cache.get_file(f"{name}.pyd")
+    suffix = sysconfig.get_config_var("EXT_SUFFIX")
+    cache_path = cache.get_file(f"{name}{suffix}")
     if cache_path is None:
         with tempfile.TemporaryDirectory() as tmpdir:
             src_path = os.path.join(tmpdir, "main.c")
@@ -137,7 +145,7 @@ def compile_module_from_src(src, name):
                 f.write(src)
             so = _build(name, src_path, tmpdir, [], include_dir, [])
             with open(so, "rb") as f:
-                cache_path = cache.put(f.read(), f"{name}.pyd", binary=True)
+                cache_path = cache.put(f.read(), f"{name}{suffix}", binary=True)
     import importlib.util
     spec = importlib.util.spec_from_file_location(name, cache_path)
     mod = importlib.util.module_from_spec(spec)
