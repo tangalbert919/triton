@@ -6,8 +6,11 @@
 // clang-format on
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
+#ifdef _WIN32
 #include <Windows.h>
-// #include <dlfcn.h>
+#else
+#include <dlfcn.h>
+#endif
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -41,7 +44,9 @@ static const char *hipLibSearchPaths[] = {"/*py_libhip_search_path*/"};
                   unsigned int numOptions, hipJitOption *options,              \
                   void **optionValues)                                         \
   FOR_EACH_ERR_FN(hipModuleGetFunction, hipFunction_t *function,               \
-                  hipModule_t module, const char *kname)
+                  hipModule_t module, const char *kname)                       \
+  FOR_EACH_ERR_FN(hipFuncGetAttribute, int *, hipFunction_attribute attr,      \
+                  hipFunction_t function)
 
 // The HIP symbol table for holding resolved dynamic library symbols.
 struct HIPSymbolTable {
@@ -133,7 +138,7 @@ static PyObject *getDeviceProperties(PyObject *self, PyObject *args) {
 
   // create a struct to hold device properties
   return Py_BuildValue(
-      "{s:i, s:i, s:i, s:i, s:i, s:i, s:s, s:i}", "max_shared_mem",
+      "{s:i, s:i, s:i, s:i, s:i, s:i, s:s, s:i, s:i}", "max_shared_mem",
       props.sharedMemPerBlock, "max_num_regs", props.regsPerBlock,
       "multiprocessor_count", props.multiProcessorCount, "sm_clock_rate",
       props.clockRate, "mem_clock_rate", props.memoryClockRate, "mem_bus_width",
