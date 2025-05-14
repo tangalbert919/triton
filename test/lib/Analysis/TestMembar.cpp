@@ -1,6 +1,4 @@
-#include "mlir/Conversion/SCFToControlFlow/SCFToControlFlow.h"
-#include "mlir/Dialect/GPU/IR/GPUDialect.h"
-#include "mlir/IR/Dialect.h"
+#include "mlir/IR/Operation.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/DialectConversion.h"
 #include "triton/Analysis/Allocation.h"
@@ -25,7 +23,8 @@ struct TestMembarPass
     ModuleOp moduleOp = cast<ModuleOp>(operation);
     // Print all ops after membar pass
     ModuleAllocation allocation(moduleOp);
-    ModuleMembarAnalysis membarPass(&allocation, [](void* a, void* b){return false;});
+    ModuleMembarAnalysis membarPass(&allocation,
+                                    [](void *a, void *b) { return false; });
     membarPass.run();
   }
 };
