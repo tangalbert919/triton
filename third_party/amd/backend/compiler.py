@@ -2,6 +2,7 @@ from triton.backends.compiler import BaseBackend, GPUTarget
 from triton._C.libtriton import ir, passes, llvm, amd
 from triton import knobs
 import os
+import shutil
 from dataclasses import dataclass
 from typing import Any, Dict, Tuple
 from types import ModuleType
@@ -175,7 +176,12 @@ class HIPBackend(BaseBackend):
         # Check env path for ld.lld
         lld_env_path = knobs.amd.lld_path
         if lld_env_path is None:
-            lld = Path(os.path.join(os.environ['HIP_PATH'], 'bin', 'ld.lld.exe'))
+            rocm_path = os.environ.get("ROCM_PATH") or os.environ.get("HIP_PATH")
+            lld_path = os.path.join(rocm_path, 'bin', 'ld.lld.exe')
+            if os.path.exists(lld_path):
+                lld = Path(lld_path)
+            else:
+                lld = Path(shutil.which("ld.lld"))
         else:
             lld = Path(lld_env_path)
         if lld.is_file():

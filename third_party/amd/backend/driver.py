@@ -65,13 +65,13 @@ def _find_already_mmapped_dylib_on_linux(lib_name):
 
 @functools.lru_cache()
 def _get_path_to_hip_runtime_dylib():
-    
     #lib_name = "libamdhip64.so"
     lib_name = "amdhip64.lib"
 
-    lib_path = os.path.join( os.environ['HIP_PATH'] , 'lib', lib_name )
+    rocm_path = os.environ.get("ROCM_PATH") or os.environ.get("HIP_PATH")
+    lib_path = os.path.join(rocm_path, 'lib', lib_name)
     if os.path.exists(lib_path):
-      return lib_path.replace('\\','\\\\')
+        return lib_path.replace('\\','\\\\')
 
     # If we are told explicitly what HIP runtime dynamic library to use, obey that.
     if env_libhip_path := knobs.amd.libhip_path:

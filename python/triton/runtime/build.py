@@ -14,15 +14,13 @@ def _build(name: str, src: str, srcdir: str, library_dirs: list[str], include_di
     so = os.path.join(srcdir, '{name}{suffix}'.format(name=name, suffix=suffix))
     # try to avoid setuptools if possible
 
-    import torch
-    is_zluda = torch.cuda.get_device_capability() == (8, 8)
-    if is_zluda:
-        clang = os.path.join(os.environ['HIP_PATH'], 'bin', 'clang.exe')
-        print("Using HIP SDK Clang.")
+    cc = os.environ.get("CC")
+    if cc is None:
+        rocm_path = os.environ.get("ROCM_PATH") or os.environ.get("HIP_PATH")
+        clang = os.path.join(rocm_path, 'bin', 'clang.exe')
         if os.path.exists(clang):
+            print("Using HIP SDK Clang.")
             cc = clang
-    else:
-        cc = os.environ.get("CC")
 
     if cc is None:
         clang = shutil.which("clang")
