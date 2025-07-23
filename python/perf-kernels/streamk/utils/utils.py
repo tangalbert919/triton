@@ -31,6 +31,14 @@ name_to_tl_types = {
 }
 
 
+def get_num_sms():
+    # Returns the Compute Unit count of the current device
+    current_device_index = torch.cuda.current_device()
+    current_device = torch.cuda.get_device_properties(current_device_index)
+    num_sms = current_device.multi_processor_count
+    return num_sms
+
+
 def run_bash_command_wrapper(commandstring, capture=True):
     try:
         run_bash_command(commandstring, capture)
