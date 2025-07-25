@@ -364,14 +364,14 @@ bool initSymbolTable() {{
       const char *symbol, void **pfn, int hipVersion, uint64_t hipFlags,
       hipDriverProcAddressQueryResult *symbolStatus);
   hipGetProcAddress_fn hipGetProcAddress;
-  dlerror(); // Clear existing errors
-  const char *error = NULL;
-  *(void **)&hipGetProcAddress = dlsym(lib, "hipGetProcAddress");
-  error = dlerror();
+  GetLastError(); // Clear existing errors
+  DWORD error = 0;
+  *(void **)&hipGetProcAddress = GetProcAddress(lib, "hipGetProcAddress");
+  error = GetLastError();
   if (error) {{
     PyErr_SetString(PyExc_RuntimeError,
-                    "cannot query 'hipGetProcAddress' from libamdhip64.so");
-    dlclose(lib);
+                    "cannot query 'hipGetProcAddress' from amdhip64_6.dll");
+    FreeLibrary(lib);
     return false;
   }}
 
@@ -387,8 +387,8 @@ bool initSymbolTable() {{
   if (status != hipSuccess) {{                                                 \
     PyErr_SetString(PyExc_RuntimeError,                                        \
                     "cannot get address for '" #hipSymbolName                  \
-                    "' from libamdhip64.so");                                  \
-    dlclose(lib);                                                              \
+                    "' from amdhip64_6.dll");                                  \
+    FreeLibrary(lib);                                                          \
     return false;                                                              \
   }}
 

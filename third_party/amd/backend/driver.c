@@ -73,17 +73,17 @@ static struct HIPSymbolTable hipSymbolTable;
 
 static int checkDriverVersion(void *lib) {
   int hipVersion = -1;
-  const char *error = NULL;
+  DWORD error = 0;
   typedef hipError_t (*hipDriverGetVersion_fn)(int *driverVersion);
   hipDriverGetVersion_fn hipDriverGetVersion;
-  dlerror(); // Clear existing errors
+  GetLastError(); // Clear existing errors
   hipDriverGetVersion =
-      (hipDriverGetVersion_fn)dlsym(lib, "hipDriverGetVersion");
-  error = dlerror();
+      (hipDriverGetVersion_fn)GetProcAddress(lib, "hipDriverGetVersion");
+  error = GetLastError();
   if (error) {
     PyErr_SetString(PyExc_RuntimeError,
                     "cannot query 'hipDriverGetVersion' from libamdhip64.so");
-    dlclose(lib);
+    FreeLibrary(lib);
     return -1;
   }
 
@@ -97,12 +97,12 @@ static int checkDriverVersion(void *lib) {
     const int hipPatchVersion =
         TRITON_HIP_DRIVER_EXTRACT_PATCH_VERSION(hipVersion);
     snprintf(msgBuff, sizeof(msgBuff),
-             "libamdhip64 version %d.%d.%d is not supported! Required major "
+             "amdhip64 version %d.%d.%d is not supported! Required major "
              "version is >=%d.",
              hipMajVersion, hipMinVersion, hipPatchVersion,
              TRITON_HIP_DRIVER_REQ_MAJOR_VERSION);
     PyErr_SetString(PyExc_RuntimeError, msgBuff);
-    dlclose(lib);
+    FreeLibrary(lib);
     return -1;
   }
 
@@ -112,15 +112,17 @@ static int checkDriverVersion(void *lib) {
 }
 
 bool initSymbolTable() {
-  void *lib;
+  void *lib = LoadLibrary("amdhip64_6.dll");
 
   // Go through the list of search paths to dlopen the first HIP driver library.
-  int n = sizeof(hipLibSearchPaths) / sizeof(hipLibSearchPaths[0]);
-  for (int i = 0; i < n; ++i) {
-    void *handle = dlopen(hipLibSearchPaths[i], RTLD_LAZY | RTLD_LOCAL);
-    if (handle) {
-      lib = handle;
-      // printf("[triton] chosen %s\n", hipLibSearchPaths[i]);
+  if (!lib) {
+    int n = sizeof(hipLibSearchPaths) / sizeof(hipLibSearchPaths[0]);
+    for (int i = 0; i < n; ++i) {
+      void *handle = LoadLibrary(hipLibSearchPaths[i]);
+      if (handle) {
+        lib = handle;
+        // printf("[triton] chosen %s\n", hipLibSearchPaths[i]);
+      }
     }
   }
 
@@ -133,19 +135,19 @@ bool initSymbolTable() {
   if (hipVersion == -1)
     return false;
 
-  const char *error = NULL;
+  DWORD error = 0;
   typedef hipError_t (*hipGetProcAddress_fn)(
       const char *symbol, void **pfn, int hipVersion, uint64_t hipFlags,
       hipDriverProcAddressQueryResult *symbolStatus);
   hipGetProcAddress_fn hipGetProcAddress;
-  dlerror(); // Clear existing errors
+  GetLastError(); // Clear existing errors
 
-  *(void **)&hipGetProcAddress = dlsym(lib, "hipGetProcAddress");
-  error = dlerror();
+  *(void **)&hipGetProcAddress = GetProcAddress(lib, "hipGetProcAddress");
+  error = GetLastError();
   if (error) {
     PyErr_SetString(PyExc_RuntimeError,
                     "cannot query 'hipGetProcAddress' from libamdhip64.so");
-    dlclose(lib);
+    FreeLibrary(lib);
     return false;
   }
 
@@ -160,14 +162,14 @@ bool initSymbolTable() {
   if (status != hipSuccess) {                                                  \
     PyErr_SetString(PyExc_RuntimeError,                                        \
                     "cannot get address for '" #hipSymbolName                  \
-                    "' from libamdhip64.so");                                  \
-    dlclose(lib);                                                              \
-    return false;
-}
+                    "' from amdhip64_6.dll");                                  \
+    FreeLibrary(lib);                                                          \
+    return false;                                                              \
+  }
 
-HIP_SYMBOL_LIST(QUERY_EACH_FN, QUERY_EACH_FN)
+  HIP_SYMBOL_LIST(QUERY_EACH_FN, QUERY_EACH_FN)
 
-return true;
+  return true;
 }
 
 static inline void gpuAssert(hipError_t code, const char *file, int line) {
