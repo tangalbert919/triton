@@ -8,6 +8,7 @@
 #include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
+#include "third_party/amd/include/Analysis/AxisInfoExt.h"
 #include "third_party/amd/include/Analysis/RangeAnalysis.h"
 #include "third_party/amd/include/Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "third_party/amd/lib/TritonAMDGPUToLLVM/Utility.h"
@@ -202,6 +203,10 @@ bool verifyNonNegativeExpr(
             return verifyNonSmallerByAssumption(op.getLhs(), assumptions,
                                                 op.getRhs());
           })
+          .Case<triton::amdgpu::ExtractSliceOp>([&](auto op) {
+            return verifyNonNegativeExpr(op->getOperand(0), assumptions,
+                                         solver);
+          })
           .Default([&](Operation *) {
             // Conservatively assume that the expression is negative
             LDBG("  Unhandled op, cannot assume non-negative");
@@ -253,6 +258,97 @@ Value getBlockStride(Location loc, Value offset, PatternRewriter &rewriter) {
       }
   return nullptr;
 }
+
+// /*-----------------AtomicCAS-------------------*/
+
+struct ConvertTritonAtomicCASOpToBufferAtomicCAS
+    : public mlir::OpRewritePattern<triton::AtomicCASOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  ConvertTritonAtomicCASOpToBufferAtomicCAS(
+      mlir::MLIRContext *context,
+      DenseMap<Value, SetVector<Operation *>> &assumptions,
+      ModuleAxisInfoAnalysis &axisAnalysisPass,
+      std::shared_ptr<DataFlowSolver> solver)
+      : mlir::OpRewritePattern<triton::AtomicCASOp>(context),
+        assumptions(assumptions), axisAnalysisPass(axisAnalysisPass),
+        solver(std::move(solver)) {}
+
+  mlir::LogicalResult
+  matchAndRewrite(triton::AtomicCASOp op,
+                  PatternRewriter &rewriter) const override {
+    LDBG("Try to convert: " << op);
+    Value ptr = op.getPtr();
+    auto sem = op.getSem();
+    auto scope = op.getScope();
+
+    if (!canUseBufferOps(ptr, assumptions, solver)) {
+      return rewriter.notifyMatchFailure(op, "canUseBufferOps check failed");
+    }
+
+    switch (scope) {
+    case MemSyncScope::GPU:
+    case MemSyncScope::CTA:
+      break;
+    default:
+      return rewriter.notifyMatchFailure(op, "CAS with unsupported scope");
+    }
+    LDBG("CAS supported scope");
+
+    switch (sem) {
+    case MemSemantic::RELAXED:
+    case MemSemantic::RELEASE:
+    case MemSemantic::ACQUIRE:
+    case MemSemantic::ACQUIRE_RELEASE:
+      break;
+    default:
+      return rewriter.notifyMatchFailure(
+          op, "CAS with unsupported memory ordering");
+    }
+
+    auto addPtrOp = ptr.getDefiningOp<triton::AddPtrOp>();
+    Value tensorPtr = addPtrOp.getPtr();
+    Value tensorOffset = addPtrOp.getOffset();
+    auto splatOp = tensorPtr.getDefiningOp<triton::SplatOp>();
+    Value basePtr = splatOp.getSrc();
+
+    // Buffer atomic CAS only supports i32/i64
+    auto checkType = getElementTypeOrSelf(op.getVal());
+    bool isSupportedType = checkType.isInteger(32) || checkType.isInteger(64);
+    if (!isSupportedType) {
+      return rewriter.notifyMatchFailure(op, "AtomicCAS with unsupported type");
+    }
+    LDBG("AtomicCAS supported type");
+
+    // Buffer atomics support 32 and 64-bit operations, so inputs must be at
+    // least 32-bits. Otherwise, fall back to the existing path for atomics
+    auto opValueType = op.getVal().getType();
+    auto opBitWidth = 0;
+    if (auto tensorType = dyn_cast<RankedTensorType>(opValueType)) {
+      auto elemBitWidth = tensorType.getElementTypeBitWidth();
+      opBitWidth =
+          getVectorSize(basePtr, tensorOffset, axisAnalysisPass) * elemBitWidth;
+    } else {
+      opBitWidth = opValueType.getIntOrFloatBitWidth();
+    }
+
+    if (opBitWidth < 32) {
+      return rewriter.notifyMatchFailure(
+          op, "BufferAtomicCAS requires opBitWidth >= 32");
+    }
+    Value blockStride = getBlockStride(op->getLoc(), tensorOffset, rewriter);
+    rewriter.replaceOpWithNewOp<triton::amdgpu::BufferAtomicCASOp>(
+        op, op.getVal().getType(), basePtr, tensorOffset, op.getCmp(),
+        op.getVal(), blockStride, sem, scope);
+    return success();
+  }
+
+private:
+  // Assumptions collected through the function
+  const DenseMap<Value, SetVector<Operation *>> &assumptions;
+  ModuleAxisInfoAnalysis &axisAnalysisPass;
+  std::shared_ptr<DataFlowSolver> solver;
+};
 
 struct ConvertTritonAtomicRMWOpToBufferAtomicRMW
     : public mlir::OpRewritePattern<triton::AtomicRMWOp> {
@@ -452,15 +548,6 @@ struct ConvertTritonLoadToBufferLoad : public mlir::OpRewritePattern<SourceOp> {
 
       assert(bufferLoadOp);
 
-      // Propagate `OpIdxAttr` if the currently processed `tt.LoadOp` was
-      // labeled it. The attribute needs to be preserved for custom instruction
-      // scheduling.
-      if (auto opIdxAttr =
-              op->template getAttrOfType<triton::amdgpu::OpIdxAttr>(
-                  triton::amdgpu::OpIdxAttr::getMnemonic())) {
-        bufferLoadOp->setAttr(triton::amdgpu::OpIdxAttr::getMnemonic(),
-                              opIdxAttr);
-      }
       rewriter.replaceOp(op, bufferLoadOp);
       return success();
     }
@@ -542,7 +629,7 @@ public:
     if (failed(solver->initializeAndRun(getOperation())))
       return signalPassFailure();
 
-    ModuleAxisInfoAnalysis axisInfoAnalysis(mod);
+    AMD::ModuleAxisInfoAnalysis axisInfoAnalysis(mod);
     patterns.add<ConvertTritonLoadToBufferLoad<tt::LoadOp>,
                  ConvertTritonLoadToBufferLoad<ttg::AsyncCopyGlobalToLocalOp>,
                  ConvertTritonStoreToBufferStore>(context, assumptions, solver);
@@ -552,9 +639,11 @@ public:
     // lowering to LLVM
     triton::AMD::ISAFamily isaFamily =
         triton::AMD::deduceISAFamily(archGenerationName);
-    if (ISAFamily::CDNA3 == isaFamily)
+    if (this->allowBufferAtomics && ISAFamily::CDNA3 == isaFamily)
       patterns.add<ConvertTritonAtomicRMWOpToBufferAtomicRMW>(
           context, assumptions, axisInfoAnalysis, solver, isaFamily);
+    patterns.add<ConvertTritonAtomicCASOpToBufferAtomicCAS>(
+        context, assumptions, axisInfoAnalysis, solver);
 
     if (applyPatternsGreedily(mod, std::move(patterns)).failed())
       signalPassFailure();

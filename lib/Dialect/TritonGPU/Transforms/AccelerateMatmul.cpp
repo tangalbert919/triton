@@ -6,6 +6,7 @@
 #include "mlir/Support/LogicalResult.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "triton/Analysis/Utility.h"
+#include "triton/Conversion/MLIRTypes.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
@@ -332,6 +333,15 @@ public:
     auto oldBType = cast<RankedTensorType>(b.getType());
     auto oldRetType = cast<RankedTensorType>(dotOp.getType());
 
+    // Enable F64 MMA only on SM80/SM90 with high performance F64 tensorcore.
+    // Otherwise, fallback to F64 FMA for better performance.
+    if ((oldAType.getElementType().isF64() ||
+         oldBType.getElementType().isF64() ||
+         oldRetType.getElementType().isF64()) &&
+        !(computeCapability == 80 || computeCapability == 90)) {
+      return failure();
+    }
+
     // get MMA encoding for the given number of warps
     auto CTALayout = getCTALayout(oldRetType.getEncoding());
     auto retShapePerCTA = getShapePerCTA(oldRetType);
@@ -345,8 +355,7 @@ public:
     auto mmaEnc = NvidiaMmaEncodingAttr::get(
         oldRetType.getContext(), versionMajor, versionMinor, warpsPerTile,
         CTALayout, instrShape);
-    auto newRetType = RankedTensorType::get(
-        oldRetType.getShape(), oldRetType.getElementType(), mmaEnc);
+    auto newRetType = oldRetType.cloneWithEncoding(mmaEnc);
     // convert accumulator
     auto oldAcc = dotOp.getOperand(2);
     auto newAcc =
@@ -358,8 +367,7 @@ public:
       auto vType = cast<RankedTensorType>(v.getType());
       auto newVEncoding = DotOperandEncodingAttr::get(
           v.getContext(), opIdx, newRetType.getEncoding(), minType);
-      auto newVType = RankedTensorType::get(
-          vType.getShape(), vType.getElementType(), newVEncoding);
+      auto newVType = vType.cloneWithEncoding(newVEncoding);
       return rewriter.create<ConvertLayoutOp>(v.getLoc(), newVType, v);
     };
 
@@ -466,14 +474,11 @@ static Value splitBOperand(Value b, mlir::PatternRewriter &rewriter) {
     if (!tensorType)
       continue;
     Value newOperand = rewriter.create<ConvertLayoutOp>(
-        operand.get().getLoc(),
-        RankedTensorType::get(tensorType.getShape(),
-                              tensorType.getElementType(), newLayout),
+        operand.get().getLoc(), tensorType.cloneWithEncoding(newLayout),
         operand.get());
     loadOp->setOperand(operand.getOperandNumber(), newOperand);
   }
-  loadOp->getResult(0).setType(RankedTensorType::get(
-      bType.getShape(), bType.getElementType(), newLayout));
+  loadOp->getResult(0).setType(bType.cloneWithEncoding(newLayout));
   Value newB = loadOp->getResult(0);
   rewriter.setInsertionPointAfter(loadOp);
   auto cvt = rewriter.create<ConvertLayoutOp>(b.getLoc(), bType, newB);
@@ -539,9 +544,7 @@ public:
         /*mutableMemory=*/true);
     Attribute newDistributedEncoding = nvidia_gpu::getTmemCompatibleLayout(
         instrShape[0], instrShape[1], oldRetType, numWarps);
-    auto newAccType = RankedTensorType::get(oldRetType.getShape(),
-                                            oldRetType.getElementType(),
-                                            newDistributedEncoding);
+    auto newAccType = oldRetType.cloneWithEncoding(newDistributedEncoding);
     Value cvtAcc =
         rewriter.create<ConvertLayoutOp>(loc, newAccType, dotOp.getOperand(2));
     auto tokType = rewriter.getType<AsyncTokenType>();
@@ -694,9 +697,7 @@ public:
         /*mutableMemory=*/true);
     Attribute newDistributedEncoding =
         nvidia_gpu::getTmemCompatibleLayout(m, n, oldRetType, numWarps);
-    auto newAccType = RankedTensorType::get(oldRetType.getShape(),
-                                            oldRetType.getElementType(),
-                                            newDistributedEncoding);
+    auto newAccType = oldRetType.cloneWithEncoding(newDistributedEncoding);
     Value cvtAcc =
         rewriter.create<ConvertLayoutOp>(loc, newAccType, dotOp.getOperand(2));
     auto tokType = rewriter.getType<AsyncTokenType>();
@@ -719,10 +720,10 @@ public:
         /*mutableMemory=*/false);
     Attribute scaleALayout = getTmemScales(oldScaleAType, numWarps);
     Attribute scaleBLayout = getTmemScales(oldScaleBType, numWarps);
-    RankedTensorType newScaleAType = RankedTensorType::get(
-        oldScaleAType.getShape(), oldScaleAType.getElementType(), scaleALayout);
-    RankedTensorType newScaleBType = RankedTensorType::get(
-        oldScaleBType.getShape(), oldScaleBType.getElementType(), scaleBLayout);
+    RankedTensorType newScaleAType =
+        oldScaleAType.cloneWithEncoding(scaleALayout);
+    RankedTensorType newScaleBType =
+        oldScaleBType.cloneWithEncoding(scaleBLayout);
 
     auto lhsScale = addSmemStageToScaleLoad(dotOp.getAScale(), rewriter);
     auto rhsScale = addSmemStageToScaleLoad(dotOp.getBScale(), rewriter);
@@ -757,7 +758,20 @@ static Value promoteOperand(OpBuilder &builder, Location loc, Value operand,
                             Type promotedType) {
   Type tensorPromotedType = cast<RankedTensorType>(operand.getType())
                                 .cloneWith(std::nullopt, promotedType);
-  return builder.create<FpToFpOp>(loc, tensorPromotedType, operand);
+  Type operandElType =
+      cast<RankedTensorType>(operand.getType()).getElementType();
+  if (type::isFloat8(operandElType)) {
+    return builder.create<FpToFpOp>(loc, tensorPromotedType, operand);
+  }
+  return builder.create<arith::ExtFOp>(loc, tensorPromotedType, operand);
+}
+
+static bool mmav2SupportsFp8Operands(int computeCapability) {
+  // promote operands for sm < 89 since fp8 mma is not natively supported
+  // although PTX instructions for mma v2 w/ fp8 operands exist for sm90 and
+  // sm100, they are emulated as fp16 upcasts + fp16 HMMA in SASS. sm120 has
+  // hardware support for fp8 operands w/ mmav2.
+  return computeCapability == 89 || computeCapability == 120;
 }
 
 // promote operands of dot op if the existing combination is not natively
@@ -772,10 +786,10 @@ static void decomposeMixedModeDotOp(ModuleOp mod, int computeCapability) {
         dyn_cast<NvidiaMmaEncodingAttr>(D.getType().getEncoding());
     if (mmaLayout) {
       bool isNativeFP8 = llvm::isa<Float8E5M2Type, Float8E4M3FNType>(AElType);
-      // promote operands for sm < 89 since fp8 mma is not natively supported
-      // promote operands for sm >= 90 when mma is not v3
+      // promote to f16 unless there's hardware support for fp8 operands
       if (!isNativeFP8 ||
-          (isNativeFP8 && (computeCapability == 89 || mmaLayout.isHopper())))
+          (isNativeFP8 && (mmav2SupportsFp8Operands(computeCapability) ||
+                           mmaLayout.isHopper())))
         return;
       promoteType = builder.getF16Type();
     } else {

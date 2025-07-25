@@ -1,6 +1,5 @@
 add_triton_library(TritonGPUTransforms
   AccelerateMatmul.cpp
-  Canonicalize.cpp
   Coalesce.cpp
   F32DotTC.cpp
   FuseNestedLoops.cpp
@@ -28,15 +27,14 @@ add_triton_library(TritonGPUTransforms
   ReorderInstructions.cpp
   CoalesceAsyncCopy.cpp
   Utility.cpp
-  WarpSpecialization/AutomaticWarpSpecialization.cpp
-  WarpSpecialization/LoadMMASpecialization.cpp
-  WarpSpecialization/Partition.cpp
-  WarpSpecialization/OptimizePartitionWarps.cpp
-  WarpSpecialization/PartitionBuilder.cpp
-  WarpSpecialization/PartitionLoops.cpp
-  WarpSpecialization/PartitionScheduling.cpp
-  WarpSpecialization/RewritePartitionDependencies.cpp
-
+  # WarpSpecialization/AutomaticWarpSpecialization.cpp
+  # WarpSpecialization/LoadMMASpecialization.cpp
+  # WarpSpecialization/Partition.cpp
+  # WarpSpecialization/OptimizePartitionWarps.cpp
+  # WarpSpecialization/PartitionBuilder.cpp
+  # WarpSpecialization/PartitionLoops.cpp
+  # WarpSpecialization/PartitionScheduling.cpp
+  # WarpSpecialization/RewritePartitionDependencies.cpp
   DEPENDS
   TritonGPUTransformsIncGen
 
@@ -47,7 +45,10 @@ add_triton_library(TritonGPUTransforms
   TritonIR
   TritonTransforms
   TritonGPUIR
-  TritonNvidiaGPUIR
+  # TritonNvidiaGPUIR
+  # NVWSIR
+  # NVWSTransforms
   TritonToTritonGPU
+  TritonInstrumentIR
   MLIRTransformUtils
 )

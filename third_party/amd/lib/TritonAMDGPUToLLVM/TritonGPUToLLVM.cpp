@@ -2,7 +2,6 @@
 
 #include "AsyncUtility.h"
 #include "PatternTritonGPUOpToLLVM.h"
-#include "SchedInstructions.h"
 #include "TargetInfo.h"
 #include "TritonAMDGPUToLLVM/MembarUtility.h"
 #include "mlir/Conversion/ArithToLLVM/ArithToLLVM.h"
@@ -17,6 +16,7 @@
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include "mlir/Pass/Pass.h"
+#include "third_party/amd/include/Analysis/AxisInfoExt.h"
 #include "third_party/amd/include/Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "triton/Analysis/Allocation.h"
 #include "triton/Analysis/AxisInfo.h"
@@ -133,7 +133,7 @@ struct ConvertTritonAMDGPUToLLVM
         return signalPassFailure();
     }
 
-    ModuleAxisInfoAnalysis axisInfoAnalysis(mod);
+    AMD::ModuleAxisInfoAnalysis axisInfoAnalysis(mod);
 
     // Emit logics to get threadId/blockIds/linearized clusterCTAId etc. and
     // cache the values. The reason to do it here is that cluster_ctaid is

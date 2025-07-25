@@ -1,12 +1,11 @@
+# isort: off
+# fmt: off
 from dataclasses import dataclass
 import triton
-from triton_kernels.numerics_details.mxfp import SwizzlingType
 from triton_kernels.target_info import get_cdna_version
 import torch
+from .opt_flags_details import opt_flags_amd, opt_flags_nvidia
 
-from . import opt_flags_amd, opt_flags_nvidia
-
-# fmt: off
 
 @dataclass
 class OptFlags:
@@ -21,6 +20,7 @@ class OptFlags:
     split_k: int
     fused_scatter: bool
     is_persistent: bool
+    idle_sms: int
     epilogue_subtile: int | None
     arch: str
     target_kernel_kwargs: dict
@@ -36,7 +36,6 @@ def make_default_opt_flags_amd(
     lhs_dtype,
     rhs_dtype,
     precision_config,
-    microscaling_ctx,
     m,
     n,
     k,
@@ -81,7 +80,7 @@ def make_default_opt_flags_amd(
     xcd_swizzle = num_xcds
     # block_nk:
     block_n, block_k = opt_flags_amd.compute_block_nk(
-        n, block_m, grid_m, num_xcds, lhs_dtype, rhs_dtype, microscaling_ctx
+        n, block_m, grid_m, num_xcds, lhs_dtype, rhs_dtype, precision_config
     )
     # Replace block_k if provided in constraints.
     # TODO: Does opt_flags_amd.compute_block_nk need to be refactored?
@@ -116,6 +115,7 @@ def make_default_opt_flags_amd(
         split_k=split_k,
         fused_scatter=constraints.get('fused_scatter', False),
         is_persistent=is_persistent,
+        idle_sms=0,
         epilogue_subtile=constraints.get('epilogue_subtile', None),
         arch=None,
         target_kernel_kwargs=target_kernel_kwargs,
@@ -129,7 +129,6 @@ def make_default_opt_flags_nvidia(
     lhs_dtype,
     rhs_dtype,
     precision_config,
-    microscaling_ctx,
     m,
     n,
     k,
@@ -140,7 +139,7 @@ def make_default_opt_flags_nvidia(
     epilogue_effective_itemsize,
     constraints,
 ):
-    constraints_supported = ["block_m", "block_k", "split_k", "fused_scatter", "is_persistent", "epilogue_subtile", "num_stages"]
+    constraints_supported = ["block_m", "block_k", "split_k", "fused_scatter", "is_persistent", "epilogue_subtile", "num_stages", "idle_sms"]
     assert not any([c not in constraints_supported for c in constraints]), constraints.keys()
     # tokens per expert
     if routing_data is None:
@@ -158,7 +157,7 @@ def make_default_opt_flags_nvidia(
     elif enforce_bitwise_invariance:
         block_m = 128
     else:
-        block_m = max(64, min(triton.next_power_of_2(tokens_per_expt), 128))
+        block_m = max(16, min(triton.next_power_of_2(tokens_per_expt), 128))
     # block n
     arch = None
     block_n = opt_flags_nvidia.compute_block_n(n, arch, precision_config)
@@ -172,15 +171,18 @@ def make_default_opt_flags_nvidia(
     else:
         has_simple_epilogue = precision_config.max_num_imprecise_acc is None
         is_persistent = supports_persistent and has_simple_epilogue and (tiles_per_sm >= 2.0 or lhs_dtype.itemsize <= 1) and out_dtype.itemsize < 4
+        # TEMP CHANGE
+        if precision_config.act_scale is not None or precision_config.out_scale is not None:
+            is_persistent = False
     # block k
     if constraints.get("block_k", None) is not None:
         block_k = constraints["block_k"]
     else:
-        block_k = opt_flags_nvidia.compute_block_k(k, is_persistent, lhs_dtype, rhs_dtype, microscaling_ctx)
+        block_k = opt_flags_nvidia.compute_block_k(m, k, is_persistent, lhs_dtype, rhs_dtype, precision_config)
     # split_k
     if constraints.get("split_k", None) is not None:
         split_k = constraints["split_k"]
-    elif is_persistent or enforce_bitwise_invariance:
+    elif is_persistent or enforce_bitwise_invariance or precision_config.act_scale is not None or precision_config.out_scale is not None:
         split_k = 1
     else:
         estimated_actual_grid_size = opt_flags_nvidia.compute_grid_size(None, m, n, block_m, block_n)
@@ -190,7 +192,6 @@ def make_default_opt_flags_nvidia(
         out_dtype = torch.float32
     compute_num_stages_args = (
         precision_config,
-        microscaling_ctx,
         is_persistent,
         block_m,
         block_n,
@@ -219,8 +220,7 @@ def make_default_opt_flags_nvidia(
     else:
         fused_scatter = can_use_fused_scatter and split_k == 1
     # Handshake with the HBM swizzling
-    hopper_swizzling = microscaling_ctx.swizzle_scale == SwizzlingType.HOPPER
-    num_warps = 8 if hopper_swizzling else opt_flags_nvidia.compute_num_warps(block_m, block_n)
+    num_warps = opt_flags_nvidia.compute_num_warps(block_m, block_n, precision_config)
     ret = OptFlags(
         block_m=block_m,
         block_n=block_n,
@@ -236,6 +236,7 @@ def make_default_opt_flags_nvidia(
         epilogue_subtile=epilogue_subtile,
         arch=arch,
         target_kernel_kwargs=dict(),
+        idle_sms=constraints.get("idle_sms", 0),
     )
     # check constraints
     assert all(getattr(ret, ck) == cv for ck, cv in constraints.items() if cv is not None), f"{ret} != {constraints}"
@@ -262,6 +263,8 @@ def set_opt_flags(opt_flags: OptFlags):
     assert not _opt_flags, "opt_flags already set; please reset to None first"
     _opt_flags = opt_flags
 
+class InapplicableConstraint(Exception):
+    pass
 
 def make_opt_flags(
     out_dtype,
@@ -276,14 +279,16 @@ def make_opt_flags(
     can_use_fused_scatter,
     epilogue_effective_itemsize,
 ):
-    microscaling_ctx = precision_config.mx_ctx
+    if _opt_flags_constraints.get("is_persistent", False) and not can_use_persistent_tma:
+        raise InapplicableConstraint("cannot enforce `is_persistent=True` constraint")
     enforce_bitwise_invariance = precision_config.enforce_bitwise_invariance
     if _opt_flags is not None:
         assert not _opt_flags_constraints
         return _opt_flags
-    args = [out_dtype, lhs_dtype, rhs_dtype, precision_config, microscaling_ctx, m, n, k,
+    args = [out_dtype, lhs_dtype, rhs_dtype, precision_config, m, n, k,
             routing_data, can_use_persistent_tma, can_use_fused_scatter,
-            enforce_bitwise_invariance, epilogue_effective_itemsize, _opt_flags_constraints]
+            enforce_bitwise_invariance, epilogue_effective_itemsize,
+            _opt_flags_constraints]
     backend = triton.runtime.driver.active.get_current_target().backend
     if backend == "hip":
         return make_default_opt_flags_amd(*args)

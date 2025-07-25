@@ -208,7 +208,7 @@ bool isPureUnaryInlineAsm(Operation *op);
 int getNVIDIAComputeCapability(Operation *module);
 
 // Read the amd target from the module attributes
-StringRef getAMDArch(Operation *module);
+std::optional<StringRef> getAMDArch(Operation *module);
 
 std::optional<mlir::triton::gpu::SwizzledSharedEncodingAttr>
 getSharedEncIfAllUsersAreDotEnc(Value val, bool &incompatible);
@@ -260,17 +260,22 @@ void replaceUsesAndPropagateType(OpBuilder &builder, Operation *oldUse,
 
 /// Replace all uses of `old` with a local load from `alloc` unless the use is a
 /// `ttg.local_alloc` with a matching shared encoding, in which case the shared
-/// memory is forwarded directly into the use.
-void replaceUsesWithLocalLoad(
-    OpBuilder &builder, OpResult old,
-    TypedValue<triton::gpu::MemDescType> alloc,
-    TypedValue<triton::gpu::AsyncTokenType> token = {});
+/// memory is forwarded directly into the use. Returns the `ttg.local_load` if
+/// it created one.
+triton::gpu::LocalLoadOp
+replaceUsesWithLocalLoad(OpBuilder &builder, OpResult old,
+                         TypedValue<triton::gpu::MemDescType> alloc,
+                         TypedValue<triton::gpu::AsyncTokenType> token = {});
 
 // Return true if the value comes from a load or a block argument.
 // This will skip convert layouts and memdesc views.
 // This is a helper useful to know if value is likely to come from shared memory
 // after converting loads into async loads.
 bool comesFromLoadOrBlockArg(Value v);
+
+// For structured control flow ops, returns the values associated with the
+// `resultIdx`th result.
+SmallVector<Value> getTiedArgs(Operation *op, int resultIdx);
 
 } // namespace mlir::triton
 

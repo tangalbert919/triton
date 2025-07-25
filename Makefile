@@ -6,7 +6,7 @@ PYTHON ?= python
 BUILD_DIR := $(shell cd python; $(PYTHON) -c 'from build_helpers import get_cmake_dir; print(get_cmake_dir())')
 TRITON_OPT := $(BUILD_DIR)/bin/triton-opt
 PYTEST := $(PYTHON) -m pytest
-LLVM_BUILD_PATH ?= ".llvm-project/build"
+LLVM_BUILD_PATH ?= $(realpath .llvm-project/build)
 NUM_PROCS ?= 8
 
 # Incremental builds
@@ -39,6 +39,7 @@ test-unit: all
 	TRITON_DISABLE_LINE_INFO=0 $(PYTEST) -s python/test/unit/language/test_line_info.py
 	# Run attention separately to avoid out of gpu memory
 	$(PYTEST) -vs python/tutorials/06-fused-attention.py
+	$(PYTEST) -vs python/tutorials/gluon/01-attention-forward.py
 	TRITON_ALWAYS_COMPILE=1 TRITON_DISABLE_LINE_INFO=0 LLVM_PASS_PLUGIN_PATH=python/triton/instrumentation/libGPUInstrumentationTestLib.so \
 		$(PYTEST) --capture=tee-sys -rfs -vvv python/test/unit/instrumentation/test_gpuhello.py
 	$(PYTEST) -s -n $(NUM_PROCS) python/test/gluon
