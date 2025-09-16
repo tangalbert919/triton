@@ -61,7 +61,11 @@ def _build(name: str, src: str, srcdir: str, library_dirs: list[str], include_di
     include_dirs = include_dirs + [srcdir, py_include_dir, *custom_backend_dirs]
     
     import site
-    library_dirs += [ os.path.join(site.getsitepackages()[0], 'libs') ]
+    import sys
+    if sys.prefix != sys.base_prefix: # needed if running in venv
+        library_dirs += [ os.path.join(sys.base_prefix, 'libs') ]
+    else:
+        library_dirs += [ os.path.join(site.getsitepackages()[0], 'libs') ]
     # ROCm 7
     try:
         hip_lib_path = Path(subprocess.run(["rocm-sdk", "path", "--root"], capture_output=True, text=True).stdout.strip())
