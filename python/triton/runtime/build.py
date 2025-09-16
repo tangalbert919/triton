@@ -26,8 +26,16 @@ def _build(name: str, src: str, srcdir: str, library_dirs: list[str], include_di
 
     cc = os.environ.get("CC")
     if cc is None:
-        rocm_path = os.environ.get("ROCM_PATH") or os.environ.get("HIP_PATH")
-        clang = os.path.join(rocm_path, 'bin', 'clang.exe')
+        # ROCm 7 is shipped as Python wheels, check by running rocm-sdk
+        try:
+            rocm_version = subprocess.run(["rocm-sdk", "version"], capture_output=True, text=True, check=True).stdout.strip()
+            if rocm_version >= "7.0.0":
+                from pathlib import Path
+                rocm_path = Path(subprocess.run(["rocm-sdk", "path", "--bin"], capture_output=True, text=True).stdout.strip())
+            clang = os.path.join(rocm_path, 'hipcc.exe')
+        except: # ROCm <= 6.4.3
+            rocm_path = os.environ.get("ROCM_PATH") or os.environ.get("HIP_PATH")
+            clang = os.path.join(rocm_path, 'bin', 'clang.exe')
         if os.path.exists(clang):
             print("Using HIP SDK Clang.")
             cc = clang
@@ -54,7 +62,12 @@ def _build(name: str, src: str, srcdir: str, library_dirs: list[str], include_di
     
     import site
     library_dirs += [ os.path.join(site.getsitepackages()[0], 'libs') ]
-    library_dirs += [ os.path.join(os.environ['HIP_PATH'], 'lib')]
+    # ROCm 7
+    try:
+        hip_lib_path = Path(subprocess.run(["rocm-sdk", "path", "--root"], capture_output=True, text=True).stdout.strip())
+        library_dirs += [ os.path.join(hip_lib_path, 'lib') ]
+    except:
+        library_dirs += [ os.path.join(os.environ['HIP_PATH'], 'lib')]
 
     # for -Wno-psabi, see https://gcc.gnu.org/bugzilla/show_bug.cgi?id=111047
     cc_cmd = [cc, src, "-O3", "-shared", "-Wno-psabi", "-o", so]

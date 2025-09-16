@@ -66,7 +66,13 @@ def _get_path_to_hip_runtime_dylib():
     #lib_name = "libamdhip64.so"
     lib_name = "amdhip64.lib"
 
-    rocm_path = os.environ.get("ROCM_PATH") or os.environ.get("HIP_PATH")
+    # ROCm 7 is shipped as Python wheels, check by running rocm-sdk
+    try:
+        rocm_version = subprocess.run(["rocm-sdk", "version"], capture_output=True, text=True, check=True).stdout.strip()
+        if rocm_version >= "7.0.0":
+            rocm_path = Path(subprocess.run(["rocm-sdk", "path", "--root"], capture_output=True, text=True).stdout.strip())
+    except:
+        rocm_path = os.environ.get("ROCM_PATH") or os.environ.get("HIP_PATH")
     lib_path = os.path.join(rocm_path, 'lib', lib_name)
     if os.path.exists(lib_path):
         return lib_path.replace('\\','\\\\')
