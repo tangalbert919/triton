@@ -72,7 +72,11 @@ struct HIPSymbolTable {
 
 static struct HIPSymbolTable hipSymbolTable;
 
+#ifndef _WIN32
 static int checkDriverVersion(void *lib) {
+#else
+static int checkDriverVersion(HMODULE lib) {
+#endif
   int hipVersion = -1;
 #ifndef _WIN32
   const char *error = NULL;
@@ -133,7 +137,11 @@ static int checkDriverVersion(void *lib) {
 }
 
 bool initSymbolTable() {
+#ifndef _WIN32
   void *lib;
+#else
+  HMODULE lib;
+#endif
 
   // Go through the list of search paths to dlopen the first HIP driver library.
   int n = sizeof(hipLibSearchPaths) / sizeof(hipLibSearchPaths[0]);
@@ -141,7 +149,7 @@ bool initSymbolTable() {
 #ifndef _WIN32
     void *handle = dlopen(hipLibSearchPaths[i], RTLD_LAZY | RTLD_LOCAL);
 #else
-    void *handle = LoadLibrary(hipLibSearchPaths[i]);
+    HMODULE handle = LoadLibrary(hipLibSearchPaths[i]);
 #endif
     if (handle) {
       lib = handle;
