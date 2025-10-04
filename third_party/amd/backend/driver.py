@@ -64,7 +64,10 @@ def _find_already_mmapped_dylib_on_linux(lib_name):
 
 @functools.lru_cache()
 def _get_path_to_hip_runtime_dylib():
-    lib_name = "libamdhip64.so"
+    if os.name == "nt":
+        lib_name = "amdhip64.lib"
+    else:
+        lib_name = "libamdhip64.so"
 
     # If we are told explicitly what HIP runtime dynamic library to use, obey that.
     if env_libhip_path := knobs.amd.libhip_path:
@@ -137,6 +140,19 @@ def _get_path_to_hip_runtime_dylib():
         if os.path.exists(rocm_lib_path):
             return rocm_lib_path
         paths.append(rocm_lib_path)
+
+    # If available, `rocm-sdk path --root` prints the ROCm SDK root.
+    # New in ROCm 7 if installed as Python wheels.
+    try:
+        rocm_root = subprocess.check_output(["rocm-sdk", "path", "--root"]).decode().strip()
+        if rocm_root:
+            rocm_lib_path = os.path.join(rocm_root, "lib", lib_name)
+            if os.path.exists(rocm_lib_path):
+                return rocm_lib_path
+            paths.append(rocm_lib_path)
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        # rocm-sdk may not be available
+        pass
 
     # Afterwards try to search the loader dynamic library resolution paths.
     libs = subprocess.check_output(["/sbin/ldconfig", "-p"]).decode(errors="ignore")
@@ -331,7 +347,12 @@ def make_launcher(constants, signature, warp_size):
 #include <Python.h>
 #include <dlfcn.h>
 #include <stdbool.h>
+#ifndef _WIN32
 #include <dlfcn.h>
+#else
+#define WIN32_LEAN_AND_MEAN
+#include <Windows.h>
+#endif
 
 // The list of paths to search for the HIP runtime library. The caller Python
 // code should substitute the search path placeholder.
@@ -371,14 +392,22 @@ static struct HIPSymbolTable hipSymbolTable;
 
 bool initSymbolTable() {{
   // Use the HIP runtime library loaded into the existing process if it exits.
+#ifndef _WIN32
   void *lib = dlopen("libamdhip64.so", RTLD_NOLOAD);
+#else
+  void *lib = LoadLibrary("amdhip64_7.dll");
+#endif
 
   // Otherwise, go through the list of search paths to dlopen the first HIP
   // driver library.
   if (!lib) {{
     int n = sizeof(hipLibSearchPaths) / sizeof(hipLibSearchPaths[0]);
     for (int i = 0; i < n; ++i) {{
+#ifndef _WIN32
       void *handle = dlopen(hipLibSearchPaths[i], RTLD_LAZY | RTLD_LOCAL);
+#else
+      void *handle = LoadLibrary(hipLibSearchPaths[i]);
+#endif
       if (handle) {{
         lib = handle;
       }}
@@ -393,6 +422,7 @@ bool initSymbolTable() {{
       const char *symbol, void **pfn, int hipVersion, uint64_t hipFlags,
       hipDriverProcAddressQueryResult *symbolStatus);
   hipGetProcAddress_fn hipGetProcAddress;
+#ifndef _WIN32
   dlerror(); // Clear existing errors
   const char *error = NULL;
   *(void **)&hipGetProcAddress = dlsym(lib, "hipGetProcAddress");
@@ -403,12 +433,25 @@ bool initSymbolTable() {{
     dlclose(lib);
     return false;
   }}
+#else
+  GetLastError(); // Clear existing errors
+  DWORD error = 0;
+  *(void **)&hipGetProcAddress = GetProcAddress(lib, "hipGetProcAddress");
+  error = GetLastError();
+  if (error) {{
+    PyErr_SetString(PyExc_RuntimeError,
+                    "cannot query 'hipGetProcAddress' from amdhip64.lib");
+    FreeLibrary(lib);
+    return false;
+  }}
+#endif
 
   // Resolve all symbols we are interested in.
   int hipVersion = HIP_VERSION;
   uint64_t hipFlags = 0;
   hipDriverProcAddressQueryResult symbolStatus;
   hipError_t status = hipSuccess;
+#ifndef _WIN32
 #define QUERY_EACH_FN(hipSymbolName, ...)                                      \
   status = hipGetProcAddress(#hipSymbolName,                                   \
                              (void **)&hipSymbolTable.hipSymbolName,           \
@@ -420,6 +463,19 @@ bool initSymbolTable() {{
     dlclose(lib);                                                              \
     return false;                                                              \
   }}
+#else
+#define QUERY_EACH_FN(hipSymbolName, ...)                                      \
+  status = hipGetProcAddress(#hipSymbolName,                                   \
+                             (void **)&hipSymbolTable.hipSymbolName,           \
+                             hipVersion, hipFlags, &symbolStatus);             \
+  if (status != hipSuccess) {{                                                 \
+    PyErr_SetString(PyExc_RuntimeError,                                        \
+                    "cannot get address for '" #hipSymbolName                  \
+                    "' from amdhip64.lib");                                    \
+    FreeLibrary(lib);                                                          \
+    return false;                                                              \
+  }}
+#endif
 
   HIP_SYMBOL_LIST(QUERY_EACH_FN, QUERY_EACH_FN)
 

@@ -110,6 +110,15 @@ def _build(name: str, src: str, srcdir: str, library_dirs: list[str], include_di
         _, msvc_winsdk_inc_dirs, msvc_winsdk_lib_dirs = find_msvc_winsdk()
         include_dirs = include_dirs + msvc_winsdk_inc_dirs
         library_dirs = library_dirs + msvc_winsdk_lib_dirs
+    try: # For ROCm 7 packaged with TheRock
+        from pathlib import Path
+        rocm_path = Path(subprocess.run(["rocm-sdk", "path", "--root"], capture_output=True, text=True).stdout.strip())
+        rocm_inc_path = os.path.join(rocm_path, "include")
+        rocm_lib_path = os.path.join(rocm_path, "lib")
+        include_dirs = include_dirs + [str(rocm_inc_path)]
+        library_dirs = library_dirs + [str(rocm_lib_path)]
+    except:
+        pass
     cc_cmd = _cc_cmd(cc, src, so, include_dirs, library_dirs, libraries, ccflags)
 
     try:

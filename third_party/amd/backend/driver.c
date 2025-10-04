@@ -3,7 +3,12 @@
 #include <hip/hip_runtime_api.h>
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
+#ifndef _WIN32
 #include <dlfcn.h>
+#else
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#endif
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -69,6 +74,7 @@ static struct HIPSymbolTable hipSymbolTable;
 
 static int checkDriverVersion(void *lib) {
   int hipVersion = -1;
+#ifndef _WIN32
   const char *error = NULL;
   typedef hipError_t (*hipDriverGetVersion_fn)(int *driverVersion);
   hipDriverGetVersion_fn hipDriverGetVersion;
@@ -82,6 +88,21 @@ static int checkDriverVersion(void *lib) {
     dlclose(lib);
     return -1;
   }
+#else
+  DWORD error = 0;
+  typedef hipError_t (*hipDriverGetVersion_fn)(int *driverVersion);
+  hipDriverGetVersion_fn hipDriverGetVersion;
+  GetLastError(); // Clear existing errors
+  hipDriverGetVersion =
+      (hipDriverGetVersion_fn)GetProcAddress(lib, "hipDriverGetVersion");
+  error = GetLastError();
+  if (error) {
+    PyErr_SetString(PyExc_RuntimeError,
+                    "cannot query 'hipDriverGetVersion' from amdhip64.lib");
+    FreeLibrary(lib);
+    return -1;
+  }
+#endif
 
   (void)hipDriverGetVersion(&hipVersion);
   char msgBuff[TRITON_HIP_MSG_BUFF_SIZE] = {0};
@@ -98,7 +119,11 @@ static int checkDriverVersion(void *lib) {
              hipMajVersion, hipMinVersion, hipPatchVersion,
              TRITON_HIP_DRIVER_REQ_MAJOR_VERSION);
     PyErr_SetString(PyExc_RuntimeError, msgBuff);
+#ifndef _WIN32
     dlclose(lib);
+#else
+    FreeLibrary(lib);
+#endif
     return -1;
   }
 
@@ -113,7 +138,11 @@ bool initSymbolTable() {
   // Go through the list of search paths to dlopen the first HIP driver library.
   int n = sizeof(hipLibSearchPaths) / sizeof(hipLibSearchPaths[0]);
   for (int i = 0; i < n; ++i) {
+#ifndef _WIN32
     void *handle = dlopen(hipLibSearchPaths[i], RTLD_LAZY | RTLD_LOCAL);
+#else
+    void *handle = LoadLibrary(hipLibSearchPaths[i]);
+#endif
     if (handle) {
       lib = handle;
       // printf("[triton] chosen %s\n", hipLibSearchPaths[i]);
@@ -129,11 +158,16 @@ bool initSymbolTable() {
   if (hipVersion == -1)
     return false;
 
+#ifndef _WIN32
   const char *error = NULL;
+#else
+  DWORD error = 0;
+#endif
   typedef hipError_t (*hipGetProcAddress_fn)(
       const char *symbol, void **pfn, int hipVersion, uint64_t hipFlags,
       hipDriverProcAddressQueryResult *symbolStatus);
   hipGetProcAddress_fn hipGetProcAddress;
+#ifndef _WIN32
   dlerror(); // Clear existing errors
 
   *(void **)&hipGetProcAddress = dlsym(lib, "hipGetProcAddress");
@@ -142,6 +176,16 @@ bool initSymbolTable() {
     PyErr_SetString(PyExc_RuntimeError,
                     "cannot query 'hipGetProcAddress' from libamdhip64.so");
     dlclose(lib);
+#else
+  GetLastError();
+
+  *(void **)&hipGetProcAddress = GetProcAddress(lib, "hipGetProcAddress");
+  error = GetLastError();
+  if (error) {
+    PyErr_SetString(PyExc_RuntimeError,
+                    "cannot query 'hipGetProcAddress' from amdhip64.lib");
+    FreeLibrary(lib);
+#endif
     return false;
   }
 
@@ -149,6 +193,7 @@ bool initSymbolTable() {
   uint64_t hipFlags = 0;
   hipDriverProcAddressQueryResult symbolStatus;
   hipError_t status = hipSuccess;
+#ifndef _WIN32
 #define QUERY_EACH_FN(hipSymbolName, ...)                                      \
   status = hipGetProcAddress(#hipSymbolName,                                   \
                              (void **)&hipSymbolTable.hipSymbolName,           \
@@ -160,6 +205,19 @@ bool initSymbolTable() {
     dlclose(lib);                                                              \
     return false;                                                              \
   }
+#else
+#define QUERY_EACH_FN(hipSymbolName, ...)                                      \
+  status = hipGetProcAddress(#hipSymbolName,                                   \
+                             (void **)&hipSymbolTable.hipSymbolName,           \
+                             hipVersion, hipFlags, &symbolStatus);             \
+  if (status != hipSuccess) {                                                  \
+    PyErr_SetString(PyExc_RuntimeError,                                        \
+                    "cannot get address for '" #hipSymbolName                  \
+                    "' from amdhip64.lib");                                    \
+    FreeLibrary(lib);                                                          \
+    return false;                                                              \
+  }
+#endif
 
   HIP_SYMBOL_LIST(QUERY_EACH_FN, QUERY_EACH_FN)
 
