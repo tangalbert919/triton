@@ -65,7 +65,7 @@ def _find_already_mmapped_dylib_on_linux(lib_name):
 @functools.lru_cache()
 def _get_path_to_hip_runtime_dylib():
     if os.name == "nt":
-        lib_name = "amdhip64.lib"
+        lib_name = "amdhip64_7.dll"
     else:
         lib_name = "libamdhip64.so"
 
@@ -187,6 +187,8 @@ class HIPUtils(object):
         # Just do a simple search and replace here instead of templates or format strings.
         # This way we don't need to escape-quote C code curly brackets and we can replace
         # exactly once.
+        if os.name == "nt":
+            libhip_path = libhip_path.replace('\\', '\\\\')
         src = src.replace('/*py_libhip_search_path*/', libhip_path, 1)
         mod = compile_module_from_src(src=src, name="hip_utils", include_dirs=include_dirs)
         self.load_binary = mod.load_binary
@@ -395,7 +397,7 @@ bool initSymbolTable() {{
 #ifndef _WIN32
   void *lib = dlopen("libamdhip64.so", RTLD_NOLOAD);
 #else
-  void *lib = LoadLibrary("amdhip64_7.dll");
+  HMODULE lib = LoadLibrary("amdhip64_7.dll");
 #endif
 
   // Otherwise, go through the list of search paths to dlopen the first HIP
@@ -406,7 +408,7 @@ bool initSymbolTable() {{
 #ifndef _WIN32
       void *handle = dlopen(hipLibSearchPaths[i], RTLD_LAZY | RTLD_LOCAL);
 #else
-      void *handle = LoadLibrary(hipLibSearchPaths[i]);
+      HMODULE handle = LoadLibrary(hipLibSearchPaths[i]);
 #endif
       if (handle) {{
         lib = handle;
