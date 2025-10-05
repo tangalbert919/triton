@@ -65,7 +65,11 @@ def _find_already_mmapped_dylib_on_linux(lib_name):
 @functools.lru_cache()
 def _get_path_to_hip_runtime_dylib():
     if os.name == "nt":
-        lib_name = "amdhip64_7.dll"
+        hip_version = subprocess.check_output(["hipconfig", "--version"]).decode().strip()
+        if hip_version >= "7.0.0":
+            lib_name = "amdhip64_7.dll"
+        else:
+            lib_name = "amdhip64_6.dll"
     else:
         lib_name = "libamdhip64.so"
 
@@ -125,7 +129,10 @@ def _get_path_to_hip_runtime_dylib():
     try:
         hip_root = subprocess.check_output(["hipconfig", "--path"]).decode().strip()
         if hip_root:
-            hip_lib_path = os.path.join(hip_root, "lib", lib_name)
+            if os.name == "nt":
+                hip_lib_path = os.path.join(hip_root, "bin", lib_name)
+            else:
+                hip_lib_path = os.path.join(hip_root, "lib", lib_name)
             if os.path.exists(hip_lib_path):
                 return hip_lib_path
             paths.append(hip_lib_path)
@@ -140,19 +147,6 @@ def _get_path_to_hip_runtime_dylib():
         if os.path.exists(rocm_lib_path):
             return rocm_lib_path
         paths.append(rocm_lib_path)
-
-    # If available, `rocm-sdk path --root` prints the ROCm SDK root.
-    # New in ROCm 7 if installed as Python wheels.
-    try:
-        rocm_root = subprocess.check_output(["rocm-sdk", "path", "--root"]).decode().strip()
-        if rocm_root:
-            rocm_lib_path = os.path.join(rocm_root, "lib", lib_name)
-            if os.path.exists(rocm_lib_path):
-                return rocm_lib_path
-            paths.append(rocm_lib_path)
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        # rocm-sdk may not be available
-        pass
 
     # Afterwards try to search the loader dynamic library resolution paths.
     libs = subprocess.check_output(["/sbin/ldconfig", "-p"]).decode(errors="ignore")
