@@ -26,6 +26,13 @@ def get_cc():
         # Find and check MSVC and Windows SDK from environment variables set by Launch-VsDevShell.ps1 or VsDevCmd.bat
         cc, _, _ = find_msvc_winsdk(env_only=True)
     if cc is None:
+        # AMD's HIP SDK Clang
+        hip_root = subprocess.check_output(["hipconfig", "--hipclangpath"]).decode().strip()
+        if hip_root:
+            cc = os.path.join(hip_root, "clang.exe")
+            if not os.path.exists(cc):
+                cc = None
+    if cc is None:
         # Bundled TinyCC
         cc = os.path.join(sysconfig.get_paths()["platlib"], "triton", "runtime", "tcc", "tcc.exe")
         if not os.path.exists(cc):
