@@ -459,13 +459,18 @@ class HIPBackend(BaseBackend):
         if knobs.compilation.enable_asan:
             target_features = '+xnack'
         hsaco = amd.assemble_amdgcn(src, options.arch, target_features)
-        with tempfile.NamedTemporaryFile() as tmp_out:
-            with tempfile.NamedTemporaryFile() as tmp_in:
-                with open(tmp_in.name, "wb") as fd_in:
-                    fd_in.write(hsaco)
-                amd.link_hsaco(tmp_in.name, tmp_out.name)
-            with open(tmp_out.name, "rb") as fd_out:
-                ret = fd_out.read()
+
+        tmp_out = tempfile.NamedTemporaryFile("rb", delete=False)
+        tmp_out_name = tmp_out.name
+        tmp_out.close()
+
+        tmp_in = tempfile.NamedTemporaryFile("wb", delete=False)
+        tmp_in.write(hsaco)
+        tmp_in.close()
+
+        amd.link_hsaco(tmp_in.name, tmp_out_name)
+        with open(tmp_out_name, "rb") as tmp_out:
+            ret = tmp_out.read()
         return ret
 
     def add_stages(self, stages, options, language):

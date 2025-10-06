@@ -341,7 +341,9 @@ def make_launcher(constants, signature, warp_size):
 #include <hip/hip_runtime.h>
 #include <hip/hip_runtime_api.h>
 #include <Python.h>
+#ifndef _WIN32
 #include <dlfcn.h>
+#endif
 #include <stdbool.h>
 #ifndef _WIN32
 #include <dlfcn.h>

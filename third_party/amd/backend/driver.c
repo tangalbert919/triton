@@ -158,7 +158,7 @@ bool initSymbolTable() {
   }
 
   if (!lib) {
-    PyErr_SetString(PyExc_RuntimeError, "cannot open libamdhip64.so");
+    PyErr_SetString(PyExc_RuntimeError, "cannot open amdhip64_7.dll");
     return false;
   }
 
